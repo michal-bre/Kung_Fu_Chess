@@ -1,0 +1,19 @@
+# קבצים זמניים של IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+*.iws
+
+# קבצי מחלקה מהודרים
+*.class
+out/
+build/
+target/
+
+# קבצי מערכת הפעלה
+.DS_Store
+Thumbs.db
+
+# הגדרות מקומיות של Maven (אם תעבוד עם זה)
+.mvn/
