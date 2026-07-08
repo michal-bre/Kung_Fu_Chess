@@ -40,7 +40,7 @@ public class InteractionHandler {
         } else {
             Piece.Color opponentColor = (selectedPiece.getColor() == Piece.Color.WHITE) ? Piece.Color.BLACK : Piece.Color.WHITE;
 
-            if (!movementEngine.isColorMoving(opponentColor) && !movementEngine.isPieceMovingTo(clickedPos) && moveValidator.isValidMove(selectedPosition, clickedPos, selectedPiece)) {
+            if (!movementEngine.isPieceMovingTo(clickedPos) && moveValidator.isValidMove(selectedPosition, clickedPos, selectedPiece)) {
                 int distance = moveValidator.calculateDistance(selectedPosition, clickedPos);
                 long totalTravelTime = distance * MovementEngine.MOVE_DURATION_PER_SQUARE;
                 long arrivalTime = movementEngine.getGameTimeMillis() + totalTravelTime;
