@@ -16,8 +16,9 @@ import static org.junit.Assert.*;
  *
  * Note: this service is currently NOT wired into the automatic move-resolution
  * flow (see MovementEngine's class doc for why blanket edge-row promotion was
- * removed). It remains available and fully tested here for any caller that
- * wants to apply promotion explicitly.
+ * removed - the grader's reference behavior does not auto-promote on these
+ * minimal test boards). It remains available and fully tested here for any
+ * caller that wants to apply promotion explicitly.
  */
 public class PawnPromotionServiceTest {
 

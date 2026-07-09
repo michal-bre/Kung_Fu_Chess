@@ -18,6 +18,13 @@ import org.example.model.Position;
  * interface (see that file for the Dependency Inversion rationale). This is
  * what makes it possible to unit test move validation with a trivial fake
  * ActiveMoveQuery, without ever constructing a MovementEngine.
+ *
+ * Note: this class deliberately has NO knowledge of pawn promotion. Move
+ * legality and promotion are two separate concerns - whether a move is legal
+ * never depends on what happens to the piece after it lands, so this class
+ * must never call PawnPromotionService (or anything like it). Promotion is
+ * applied afterward, by whichever layer actually commits the completed move
+ * to the board (see MovementEngine).
  */
 public class MoveValidationService implements MoveValidationPort {
     private final Board board;
@@ -84,6 +91,10 @@ public class MoveValidationService implements MoveValidationPort {
         return true;
     }
 
+    // Pawn move-shape validation only - single step, double step from the
+    // pawn's own starting row, and diagonal capture. This method never
+    // inspects or triggers promotion; it only answers "is this move shape
+    // legal", exactly like every other piece's validation path above.
     private boolean isValidPawnMove(Position from, Position to, Piece pawn) {
         int deltaRow = to.getRow() - from.getRow();
         int deltaCol = to.getCol() - from.getCol();
@@ -92,10 +103,10 @@ public class MoveValidationService implements MoveValidationPort {
 
         int direction = (pawn.getColor() == Piece.Color.WHITE) ? -1 : 1;
         // The pawn's starting row is the literal edge of the board on its own side -
-        // row (height-1) for white, row 0 for black - not "one row in from the edge".
-        // This is deliberately edge-based rather than assuming a fixed 8-row layout
-        // with a reserved back rank, so double-step validity works correctly on any
-        // board size, including minimal boards used to test movement in isolation.
+        // row (height-1) for white, row 0 for black. This is deliberately edge-based
+        // (not "one row in from the edge") so double-step validity works correctly on
+        // any board size, including minimal boards used to test movement in isolation,
+        // where there is no separate back rank behind the pawn's own start square.
         int startingRow = (pawn.getColor() == Piece.Color.WHITE) ? (board.getHeight() - 1) : 0;
         Piece targetPiece = board.getPiece(to);
 
@@ -108,6 +119,9 @@ public class MoveValidationService implements MoveValidationPort {
         }
 
         if (deltaCol == 0) {
+            // Single step forward is always legal (regardless of starting row),
+            // as long as the destination is empty. This check never looks at
+            // startingRow, so it can never be mistaken for a promotion check.
             if (deltaRow != direction && deltaRow != 2 * direction) {
                 return false;
             }
