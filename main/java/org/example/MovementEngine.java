@@ -7,6 +7,7 @@ import java.util.List;
 public class MovementEngine {
     private final Board board;
     private final List<ActiveMove> activeMoves;
+    private final List<ActiveMove> recentlyCompletedMoves;
     private long gameTimeMillis;
     private boolean isGameOver;
 
@@ -16,6 +17,7 @@ public class MovementEngine {
     public MovementEngine(Board board) {
         this.board = board;
         this.activeMoves = new ArrayList<>();
+        this.recentlyCompletedMoves = new ArrayList<>();
         this.gameTimeMillis = 0;
         this.isGameOver = false;
     }
@@ -82,51 +84,70 @@ public class MovementEngine {
     }
 
     public void triggerAirCaptures() {
-        ActiveMove activeJump = null;
+        // Find all active jumps
+        List<ActiveMove> activeJumps = new ArrayList<>();
         for (ActiveMove move : activeMoves) {
             if (move.isJump()) {
-                activeJump = move;
-                break;
+                activeJumps.add(move);
             }
         }
 
-        if (activeJump == null) return;
+        if (activeJumps.isEmpty()) return;
 
-        Iterator<ActiveMove> iterator = activeMoves.iterator();
-        while (iterator.hasNext()) {
-            ActiveMove move = iterator.next();
-            if (!move.isJump() && move.getTo().equals(activeJump.getTo()) && move.getPiece().getColor() != activeJump.getPiece().getColor()) {
-                long enemyDistance = Math.max(Math.abs(move.getTo().getRow() - move.getFrom().getRow()), Math.abs(move.getTo().getCol() - move.getFrom().getCol()));
-                long enemyStartTime = move.getArrivalTimeMillis() - (enemyDistance * MOVE_DURATION_PER_SQUARE);
-                long jumpStartTime = activeJump.getArrivalTimeMillis() - JUMP_DURATION;
-
-                if (jumpStartTime == enemyStartTime) {
+        List<ActiveMove> toRemove = new ArrayList<>();
+        
+        // For each active jump, check if any enemy moves target the same cell
+        for (ActiveMove activeJump : activeJumps) {
+            for (ActiveMove move : activeMoves) {
+                if (!move.isJump() && move.getTo().equals(activeJump.getTo()) && move.getPiece().getColor() != activeJump.getPiece().getColor()) {
+                    // An enemy piece is moving to the same cell as the jumping piece
+                    // Remove the enemy piece from the board at its starting position
                     board.setPiece(move.getFrom().getRow(), move.getFrom().getCol(), null);
-                    iterator.remove();
+                    toRemove.add(move);
                 }
             }
         }
+        
+        activeMoves.removeAll(toRemove);
     }
 
     public void advanceTime(long millis) {
         if (millis <= 0) return;
 
         this.gameTimeMillis += millis;
+        recentlyCompletedMoves.clear();
 
         List<ActiveMove> completedMoves = new ArrayList<>();
         List<ActiveMove> completedJumps = new ArrayList<>();
+        List<ActiveMove> toRemove = new ArrayList<>();
 
-        Iterator<ActiveMove> iterator = activeMoves.iterator();
-        while (iterator.hasNext()) {
-            ActiveMove move = iterator.next();
+        // Find all completed moves
+        for (ActiveMove move : activeMoves) {
             if (move.isComplete(this.gameTimeMillis)) {
                 if (move.isJump()) {
                     completedJumps.add(move);
                 } else {
                     completedMoves.add(move);
                 }
-                iterator.remove();
+                toRemove.add(move);
             }
+        }
+        
+        // Remove completed moves from active list
+        activeMoves.removeAll(toRemove);
+
+        // Check for air captures with moves still in transit
+        for (ActiveMove completedJump : completedJumps) {
+            List<ActiveMove> capturedInTransit = new ArrayList<>();
+            for (ActiveMove activeMove : activeMoves) {
+                if (!activeMove.isJump() && activeMove.getTo().equals(completedJump.getTo()) && 
+                    activeMove.getPiece().getColor() != completedJump.getPiece().getColor()) {
+                    // This enemy piece will be captured
+                    board.setPiece(activeMove.getFrom().getRow(), activeMove.getFrom().getCol(), null);
+                    capturedInTransit.add(activeMove);
+                }
+            }
+            activeMoves.removeAll(capturedInTransit);
         }
 
         for (ActiveMove normalMove : completedMoves) {
@@ -144,13 +165,33 @@ public class MovementEngine {
             }
 
             Piece targetPiece = board.getPiece(normalMove.getTo());
-            if (targetPiece != null && targetPiece.getType() == Piece.Type.KING) {
-                isGameOver = true;
+            
+            // If there's a target piece, this is a capture
+            if (targetPiece != null && targetPiece.getColor() != normalMove.getPiece().getColor()) {
+                // Remove the captured piece from the target location
+                board.setPiece(normalMove.getTo().getRow(), normalMove.getTo().getCol(), null);
+                
+                // Check if the captured piece was a KING (game over)
+                if (targetPiece.getType() == Piece.Type.KING) {
+                    isGameOver = true;
+                }
+            } else {
+                // Normal move (no capture) - move the piece
+                board.movePiece(normalMove.getFrom(), normalMove.getTo());
+                handlePawnPromotion(normalMove);
             }
-
-            board.movePiece(normalMove.getFrom(), normalMove.getTo());
-            handlePawnPromotion(normalMove);
+            
+            recentlyCompletedMoves.add(normalMove);
         }
+    }
+
+    public boolean isPieceJustCompleted(Position pos) {
+        for (ActiveMove move : recentlyCompletedMoves) {
+            if (move.getTo().equals(pos)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void handlePawnPromotion(ActiveMove move) {

@@ -65,33 +65,47 @@ public class MoveValidator {
     private boolean isValidPawnMove(Position from, Position to, Piece pawn) {
         int deltaRow = to.getRow() - from.getRow();
         int deltaCol = to.getCol() - from.getCol();
+        int absRow = Math.abs(deltaRow);
         int absCol = Math.abs(deltaCol);
 
         int direction = (pawn.getColor() == Piece.Color.WHITE) ? -1 : 1;
-        // White pawns start at row (height - 2), Black pawns start at row 1
         int startingRow = (pawn.getColor() == Piece.Color.WHITE) ? (board.getHeight() - 2) : 1;
         Piece targetPiece = board.getPiece(to);
 
+        // Check for blocked moves
+        if (movementEngine.isSquareOccupiedByActiveMove(to, pawn.getColor())) {
+            return false;
+        }
+        
+        if (targetPiece != null && targetPiece.getColor() == pawn.getColor()) {
+            return false;
+        }
+
+        // Vertical movement (no column change) - must move forward only
         if (deltaCol == 0) {
-            if (targetPiece != null || movementEngine.isSquareOccupiedByActiveMove(to, pawn.getColor())) {
+            // Must move in the correct direction
+            if (deltaRow != direction && deltaRow != 2 * direction) {
                 return false;
             }
-
-            if (deltaRow == direction) {
-                return true;
+            
+            // One square forward
+            if (absRow == 1) {
+                return targetPiece == null;
             }
 
-            if (deltaRow == 2 * direction && from.getRow() == startingRow) {
+            // Two squares forward from starting position
+            if (absRow == 2 && from.getRow() == startingRow) {
                 Position middlePos = new Position(from.getRow() + direction, from.getCol());
                 if (board.getPiece(middlePos) != null || movementEngine.isSquareOccupiedByActiveMove(middlePos, pawn.getColor())) {
                     return false;
                 }
-                return true;
+                return targetPiece == null;
             }
             return false;
         }
 
-        if (absCol == 1 && deltaRow == direction) {
+        // Capture movement - can capture any adjacent enemy
+        if (absRow <= 1 && absCol <= 1 && !(absRow == 0 && absCol == 0)) {
             return targetPiece != null && targetPiece.getColor() != pawn.getColor();
         }
 

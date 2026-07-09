@@ -65,6 +65,9 @@ public class InteractionHandler {
         Piece piece = board.getPiece(pos);
         if (piece == null) return;
 
+        // Prevent pieces that just completed a move from jumping
+        if (movementEngine.isPieceJustCompleted(pos)) return;
+
         if (movementEngine.isPieceMovingFrom(pos)) return;
 
         ActiveMove threateningEnemyMove = null;
