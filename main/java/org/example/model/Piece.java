@@ -1,5 +1,8 @@
-package org.example;
+package org.example.model;
 
+/**
+ * Model layer: pure domain entity, zero dependencies on any other layer.
+ */
 public class Piece {
 
     public enum Color {

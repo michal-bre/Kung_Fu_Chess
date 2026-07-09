@@ -1,9 +1,20 @@
-package org.example;
+package org.example.model;
 
+/**
+ * Model layer: pure domain entity, zero dependencies on any other layer.
+ *
+ * Note: Board no longer implements a "port" interface and no longer knows how
+ * to print itself. Rendering the board is an I/O concern that belongs to the
+ * adapters layer (see org.example.adapters.BoardPresenter); the model layer
+ * must stay free of any input/output logic.
+ */
 public class Board {
     private final int width;
     private final int height;
     private final Piece[][] grid; // Dynamic 2D array to hold the board state
+
+    // Constants for pixel calculations (flexible for future changes)
+    public static final int CELL_SIZE = 100;
 
     // Initializes the board dynamically based on inferred dimensions
     public Board(int width, int height) {
@@ -16,29 +27,6 @@ public class Board {
     public void setPiece(int row, int col, Piece piece) {
         grid[row][col] = piece;
     }
-
-    // Prints the board configuration precisely as expected by the VPL platform
-    public void print() {
-        for (int r = 0; r < height; r++) {
-            StringBuilder rowStr = new StringBuilder();
-            for (int c = 0; c < width; c++) {
-                if (grid[r][c] == null) {
-                    rowStr.append("."); // Prints a dot for empty squares
-                } else {
-                    rowStr.append(grid[r][c].toString()); // Prints the piece token (e.g., "wK")
-                }
-
-                // appends a single space between elements, ensuring no trailing space at the end of a line
-                if (c < width - 1) {
-                    rowStr.append(" ");
-                }
-            }
-            System.out.println(rowStr); // Prints the completed row
-        }
-    }
-
-    // Constants for pixel calculations (flexible for future changes)
-    public static final int CELL_SIZE = 100;
 
     public int getWidth() {
         return width;

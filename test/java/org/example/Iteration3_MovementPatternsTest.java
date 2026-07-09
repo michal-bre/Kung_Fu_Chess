@@ -1,4 +1,10 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
+import org.example.engine.MovementEngine;
+import org.example.rules.MoveValidationService;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -23,7 +29,7 @@ import static org.junit.Assert.*;
  */
 public class Iteration3_MovementPatternsTest {
 
-    private MoveValidator moveValidator;
+    private MoveValidationService moveValidator;
     private Board board;
 
     @Before
@@ -39,7 +45,7 @@ public class Iteration3_MovementPatternsTest {
             ". . . . . . . ."
         );
         board = BoardParser.parse(boardLines);
-        moveValidator = new MoveValidator(board, new MovementEngine(board));
+        moveValidator = new MoveValidationService(board, new MovementEngine(board));
     }
 
     @Test

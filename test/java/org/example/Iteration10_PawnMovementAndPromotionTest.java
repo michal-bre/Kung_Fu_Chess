@@ -1,4 +1,9 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
+import org.example.controller.GameController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -34,14 +39,14 @@ public class Iteration10_PawnMovementAndPromotionTest {
             ". . . . . . . bK"
         );
         board = BoardParser.parse(boardLines);
-        gameController = new GameController(board);
+        gameController = TestGameControllerFactory.create(board);
     }
 
     @Test
     public void testPawnDoubleMoveFromStartRow() {
         // Place white pawn at its starting row (6,0)
         board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Select pawn (col 0,row6) and double-move to row4 (two squares)
         gc.handleClick(50, 650);  // select (6,0)
@@ -62,7 +67,7 @@ public class Iteration10_PawnMovementAndPromotionTest {
         board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
         board.setPiece(5, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Attempt double move
         gc.handleClick(50, 650); // select pawn
@@ -82,7 +87,7 @@ public class Iteration10_PawnMovementAndPromotionTest {
         // Friendly rook at (5,2) that will reserve middle (5,0)
         board.setPiece(5, 2, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Rook moves from (5,2) to (5,0), reserving middle square (arrival in 2s)
         gc.handleClick(250, 550); // select rook at (5,2)
@@ -105,7 +110,7 @@ public class Iteration10_PawnMovementAndPromotionTest {
         board.setPiece(0, 0, null); // clear any existing piece (e.g., initial white king)
         board.setPiece(1, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         gc.handleClick(50, 150); // select pawn at (1,0)
         gc.handleClick(50, 50);  // move to (0,0)

@@ -1,145 +1,89 @@
 package org.example;
 
-import java.util.ArrayList;
-import java.util.List;
+import org.example.adapters.BoardParser;
+import org.example.adapters.BoardPresenter;
+import org.example.adapters.CommandLineAdapter;
+import org.example.adapters.CommandLineAdapter.InputData;
+import org.example.adapters.CommandLineAdapter.ParsedCommand;
+import org.example.controller.GameController;
+import org.example.controller.InteractionHandler;
+import org.example.engine.MovementEngine;
+import org.example.model.Board;
+import org.example.rules.MoveValidationService;
+
 import java.util.Scanner;
 
 /**
- * GitHub Repository: https://github.com/user/Kung_Fo_Chess
- * 
- * Kung Fu Chess - A dynamic chess game with simultaneous piece movement.
- * 
- * This program reads chess board configurations and commands from standard input,
- * processes the commands, and outputs the resulting board state.
- * 
- * Input Format:
- *   Board:
- *   [chess board in text format]
- *   Commands:
- *   [command lines]
- * 
- * Supported Commands:
- *   - print board: Display the current board state
- *   - click X Y: Process a click at pixel coordinates (X, Y)
- *   - jump X Y: Process a jump at pixel coordinates (X, Y)
- *   - wait MS: Advance game time by MS milliseconds
+ * Entry Point / Composition Root: bootstraps the application and wires every
+ * dependency by hand via constructor injection.
+ *
+ * Clean Architecture: this is the outermost layer. It is the ONLY place that
+ * is allowed to know about every layer at once - model, rules, engine,
+ * controller, and adapters - because its entire job is to construct the
+ * object graph and connect I/O to it.
+ *
+ * Responsibilities:
+ * - Read input (via CommandLineAdapter)
+ * - Parse board (via BoardParser)
+ * - Construct concrete rules/engine implementations and inject them into the
+ *   controller layer via constructors (no layer creates its own
+ *   collaborators internally anymore)
+ * - Print the board directly via BoardPresenter (GameController has no
+ *   knowledge of the adapters/UI layer)
  */
 public class Main {
     public static void main(String[] args) {
-        Scanner scanner = new Scanner(System.in);
-        List<String> boardLines = new ArrayList<>();
-        List<String> commandLines = new ArrayList<>();
-        boolean readingBoard = false;
-        boolean readingCommands = false;
-
-        // Read all inputs line by line
-        while (scanner.hasNextLine()) {
-            String line = scanner.nextLine().trim();
-            if (line.isEmpty()) {
-                continue;
-            }
-
-            if (line.equalsIgnoreCase("Board:")) {
-                readingBoard = true;
-                readingCommands = false;
-                continue;
-            }
-
-            if (line.equalsIgnoreCase("Commands:")) {
-                readingBoard = false;
-                readingCommands = true;
-                continue;
-            }
-
-            // Collect board configuration lines
-            if (readingBoard) {
-                boardLines.add(line);
-            }
-            // Collect command lines to execute later
-            else if (readingCommands) {
-                commandLines.add(line);
-            }
-        }
-        scanner.close();
-
-        // Process and validate the board inside a try-catch block
         try {
-            // 1. Parse and create the initial board
-            Board board = BoardParser.parse(boardLines);
+            // Input adaptation layer
+            Scanner scanner = new Scanner(System.in);
+            CommandLineAdapter inputAdapter = new CommandLineAdapter(scanner);
+            InputData inputData = inputAdapter.readInput();
 
-            // 2. Initialize the game controller with the parsed board
-            GameController gameController = new GameController(board);
+            // Adapters layer: parse raw text into the model
+            Board board = BoardParser.parse(inputData.boardLines);
 
-            // 3. Process and execute each command sequentially
-            for (String commandLine : commandLines) {
-                executeCommand(commandLine, gameController);
+            // Composition root wiring: build every layer explicitly and inject
+            // it into the next. Nothing below this point is instantiated by
+            // the classes that consume it.
+            MovementEngine movementEngine = new MovementEngine(board);
+            MoveValidationService moveValidationService = new MoveValidationService(board, movementEngine);
+            InteractionHandler interactionHandler = new InteractionHandler(board, movementEngine, moveValidationService);
+            GameController gameController = new GameController(movementEngine, interactionHandler);
+            BoardPresenter boardPresenter = new BoardPresenter(board);
+
+            // Execute commands
+            for (String commandLine : inputData.commandLines) {
+                ParsedCommand parsedCmd = CommandLineAdapter.parseCommand(commandLine);
+                if (parsedCmd != null) {
+                    executeCommand(parsedCmd, gameController, boardPresenter);
+                }
             }
 
         } catch (IllegalArgumentException e) {
-            // Prints the exact VPL validation error message
             System.out.println(e.getMessage());
         }
     }
 
-    // Helper method to parse and route commands to the GameController
-    private static void executeCommand(String commandLine, GameController gameController) {
-        CommandType commandType = CommandType.fromString(commandLine);
-
-        if (commandType == null) {
-            return;
-        }
-
-        switch (commandType) {
+    private static void executeCommand(CommandLineAdapter.ParsedCommand parsedCmd, GameController gameController, BoardPresenter boardPresenter) {
+        switch (parsedCmd.type) {
             case PRINT_BOARD:
-                gameController.printBoard();
+                boardPresenter.printBoard();
                 break;
             case CLICK:
-                handleClickCommand(commandLine, gameController);
+                if (parsedCmd.params.length == 2) {
+                    gameController.handleClick(parsedCmd.params[0], parsedCmd.params[1]);
+                }
                 break;
             case JUMP:
-                handleJumpCommand(commandLine, gameController);
+                if (parsedCmd.params.length == 2) {
+                    gameController.handleJump(parsedCmd.params[0], parsedCmd.params[1]);
+                }
                 break;
             case WAIT:
-                handleWaitCommand(commandLine, gameController);
+                if (parsedCmd.params.length == 1) {
+                    gameController.advanceTime(parsedCmd.params[0]);
+                }
                 break;
-        }
-    }
-
-    private static void handleClickCommand(String commandLine, GameController gameController) {
-        String[] tokens = commandLine.split("\\s+");
-        if (tokens.length == 3) {
-            try {
-                int x = Integer.parseInt(tokens[1]);
-                int y = Integer.parseInt(tokens[2]);
-                gameController.handleClick(x, y);
-            } catch (NumberFormatException e) {
-                // Soft ignore or log if parsing fails (VPL input is usually well-formed)
-            }
-        }
-    }
-
-    private static void handleJumpCommand(String commandLine, GameController gameController) {
-        String[] tokens = commandLine.split("\\s+");
-        if (tokens.length == 3) {
-            try {
-                int x = Integer.parseInt(tokens[1]);
-                int y = Integer.parseInt(tokens[2]);
-                gameController.handleJump(x, y);
-            } catch (NumberFormatException e) {
-                // Soft ignore
-            }
-        }
-    }
-
-    private static void handleWaitCommand(String commandLine, GameController gameController) {
-        String[] tokens = commandLine.split("\\s+");
-        if (tokens.length == 2) {
-            try {
-                long ms = Long.parseLong(tokens[1]);
-                gameController.advanceTime(ms);
-            } catch (NumberFormatException e) {
-                // Soft ignore if parsing fails
-            }
         }
     }
 }

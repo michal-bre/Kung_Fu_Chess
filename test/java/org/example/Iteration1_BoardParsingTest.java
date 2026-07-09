@@ -1,4 +1,8 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
 
 import org.junit.Test;
 import java.util.Arrays;

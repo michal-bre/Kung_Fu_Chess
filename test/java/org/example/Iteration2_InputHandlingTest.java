@@ -1,4 +1,8 @@
 package org.example;
+import org.example.model.Board;
+import org.example.adapters.BoardParser;
+import org.example.adapters.BoardPresenter;
+import org.example.controller.GameController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -32,7 +36,7 @@ public class Iteration2_InputHandlingTest {
             "wP . bP"
         );
         board = BoardParser.parse(boardLines);
-        gameController = new GameController(board);
+        gameController = TestGameControllerFactory.create(board);
     }
 
     @Test
@@ -130,7 +134,7 @@ public class Iteration2_InputHandlingTest {
     public void testPrintBoardShowsInitialState() {
         // Print board should show initial configuration
         // (In real test, capture output, but for now just verify it doesn't crash)
-        gameController.printBoard();
+        new BoardPresenter(board).printBoard();
     }
 
     @Test
@@ -142,7 +146,7 @@ public class Iteration2_InputHandlingTest {
         // Wait for move to complete
         gameController.advanceTime(2000);
         // Print board
-        gameController.printBoard();
+        new BoardPresenter(board).printBoard();
     }
 
     @Test
@@ -183,6 +187,6 @@ public class Iteration2_InputHandlingTest {
         gameController.advanceTime(200);
         gameController.handleClick(50, 50);
         gameController.advanceTime(500);
-        gameController.printBoard();
+        new BoardPresenter(board).printBoard();
     }
 }

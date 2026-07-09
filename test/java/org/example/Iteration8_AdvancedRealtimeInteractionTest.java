@@ -1,4 +1,9 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
+import org.example.controller.GameController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -35,7 +40,7 @@ public class Iteration8_AdvancedRealtimeInteractionTest {
             ". . . . . . . bK"
         );
         board = BoardParser.parse(boardLines);
-        gameController = new GameController(board);
+        gameController = TestGameControllerFactory.create(board);
     }
 
     @Test
@@ -43,7 +48,7 @@ public class Iteration8_AdvancedRealtimeInteractionTest {
         // Place a black defender on the target square (0,1)
         board.setPiece(0, 1, new Piece(Piece.Color.BLACK, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Black prepares a jump on (0,1)
         gc.handleJump(100, 50); // row=0,col=1 -> defender creates a jump at that square
@@ -63,7 +68,7 @@ public class Iteration8_AdvancedRealtimeInteractionTest {
         // Place two white pieces: one at (0,0) and one at (0,2)
         board.setPiece(0, 2, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Reserve (0,1) by moving the rook at (0,2) to (0,1)
         gc.handleClick(250, 50); // select rook at (0,2)
@@ -86,7 +91,7 @@ public class Iteration8_AdvancedRealtimeInteractionTest {
         // Place a friendly piece at (0,1)
         board.setPiece(0, 1, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Try to move white king from (0,0) to (0,1) where a friendly rook stands
         gc.handleClick(50, 50);   // select king
@@ -104,7 +109,7 @@ public class Iteration8_AdvancedRealtimeInteractionTest {
         // Place a black defender that will jump after white starts moving
         board.setPiece(0, 1, new Piece(Piece.Color.BLACK, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // White starts moving from (0,0) to (0,1)
         gc.handleClick(50, 50);
@@ -127,7 +132,7 @@ public class Iteration8_AdvancedRealtimeInteractionTest {
         board.setPiece(0, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
         board.setPiece(0, 2, new Piece(Piece.Color.BLACK, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Both attempt to move to (0,1) simultaneously
         gc.handleClick(50, 50);   // select white rook at (0,0)

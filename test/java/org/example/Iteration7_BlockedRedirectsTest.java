@@ -1,4 +1,9 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
+import org.example.controller.GameController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -34,7 +39,7 @@ public class Iteration7_BlockedRedirectsTest {
             ". . . . . . . bK"
         );
         board = BoardParser.parse(boardLines);
-        gameController = new GameController(board);
+        gameController = TestGameControllerFactory.create(board);
     }
 
     @Test
@@ -132,7 +137,7 @@ public class Iteration7_BlockedRedirectsTest {
         // Place second white piece
         board.setPiece(0, 1, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
         
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
         
         // Try to move king to occupied square
         gc.handleClick(50, 50);        // Select king
@@ -182,7 +187,7 @@ public class Iteration7_BlockedRedirectsTest {
         // Create second piece
         board.setPiece(7, 7, new Piece(Piece.Color.BLACK, Piece.Type.KING));
         
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
         
         // Move white king: (0, 0) to (0, 1) = 1000ms
         gc.handleClick(50, 50);
@@ -242,7 +247,7 @@ public class Iteration7_BlockedRedirectsTest {
     public void testSecondPieceCanMoveWhileFirstIsMoving() {
         board.setPiece(1, 1, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
         
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
         
         // Start king move: 1 square
         gc.handleClick(50, 50);        // Select king

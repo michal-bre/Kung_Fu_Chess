@@ -1,4 +1,9 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
+import org.example.controller.GameController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -32,7 +37,7 @@ public class Iteration9_GameOverTest {
             ". . . . . . . bK"
         );
         board = BoardParser.parse(boardLines);
-        gameController = new GameController(board);
+        gameController = TestGameControllerFactory.create(board);
     }
 
     @Test
@@ -40,7 +45,7 @@ public class Iteration9_GameOverTest {
         // Place a white rook next to the black king at (7,6)
         board.setPiece(7, 6, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Move rook from (7,6) to (7,7) to capture the black king
         gc.handleClick(650, 750); // select rook at (7,6)
@@ -69,7 +74,7 @@ public class Iteration9_GameOverTest {
         // Place a white rook next to the black king at (7,6)
         board.setPiece(7, 6, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
 
         // Capture king as before
         gc.handleClick(650, 750);

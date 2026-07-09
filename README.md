@@ -34,23 +34,37 @@
 
 ## מבנה הפרויקט
 
+הפרויקט אורגן מחדש (Clean Architecture) לארבע שכבות מנותקות, פלוס שכבת adapters/חיבור בחוץ:
+
 ```
-Kung_Fo_Chess/
-├── pom.xml                          # הגדרת Maven: Java 8, JUnit4, Jacoco (כיסוי בדיקות)
-└── src/main/java/org/example/
-    ├── Main.java                    # נקודת כניסה - קורא stdin, מנתב פקודות
-    ├── Board.java                   # ייצוג הלוח (מטריצת כלים)
-    ├── BoardParser.java             # הופך טקסט גולמי ל-Board מאומת
-    ├── Piece.java                   # צבע/סוג כלי + חוקי צורת תנועה גיאומטרית
-    ├── Position.java                # קואורדינטת (row, col) פשוטה
-    ├── ActiveMove.java              # מהלך שנמצא "באוויר" (עדיין לא הושלם)
-    ├── MovementEngine.java          # שעון המשחק + ניהול מהלכים פעילים + תפיסות
-    ├── MoveValidator.java           # בדיקת חוקיות מהלך לכל סוג כלי
-    ├── InteractionHandler.java      # תרגום קליקים/קפיצות למהלכים בפועל
-    └── GameController.java          # חזית (Facade) שמאחדת את כל הרכיבים
+Kung_Fu_Chess/
+└── main/java/org/example/
+    ├── Main.java                       # Composition root: קורא stdin, מרכיב את כל התלויות, מנתב פקודות
+    ├── model/                          # ישויות דומיין טהורות, אפס תלויות
+    │   ├── Board.java
+    │   ├── Piece.java
+    │   └── Position.java
+    ├── rules/                          # לוגיקת חוקיות, תלויה רק ב-model
+    │   ├── MoveValidationService.java  # (היורש של MoveValidator הישן)
+    │   ├── PawnPromotionService.java
+    │   ├── AirCaptureService.java
+    │   ├── ActiveMoveQuery.java        # port בבעלות rules (DIP מול engine)
+    │   └── MoveValidationPort.java     # port בבעלות rules (לשימוש controller)
+    ├── engine/                         # ניהול זמן/מצב בזמן-אמת
+    │   ├── MovementEngine.java
+    │   ├── ActiveMove.java
+    │   └── EnginePort.java             # port בבעלות engine (לשימוש controller)
+    ├── controller/                     # נקודת כניסה/תיאום, DI מלא דרך constructor
+    │   ├── GameController.java
+    │   └── InteractionHandler.java
+    └── adapters/                       # קלט/פלט (מחוץ לארבע השכבות)
+        ├── BoardParser.java
+        ├── BoardPresenter.java
+        ├── CommandLineAdapter.java
+        └── CommandType.java
 ```
 
-זהו פרויקט **Maven** רגיל בבנייה עם `Java 8`. התלויות (`JUnit`, `Hamcrest`, `Jacoco`) משמשות רק לבדיקות ולדוח כיסוי קוד, ואינן חלק מהלוגיקה של המשחק עצמו.
+זהו פרויקט **Java** נטול Maven/Gradle (מתקומפל ישירות). התלויות (`JUnit`, `Hamcrest`) נמצאות תחת `lib/` ומשמשות רק לבדיקות.
 
 ---
 
@@ -100,7 +114,7 @@ col = x / 100;
 
 ## מודל הנתונים הבסיסי
 
-### [`Piece.java`](main/java/org/example/Piece.java)
+### [`Piece.java`](main/java/org/example/model/Piece.java)
 
 מייצג כלי שחמט בודד. מכיל שני `enum` פנימיים:
 
@@ -116,11 +130,11 @@ col = x / 100;
 - **פרש**: צורת L (`2×1` או `1×2`).
 - **רגלי**: תמיד מחזיר `true` כאן! הלוגיקה המיוחדת של הרגלי (כיוון, צעד כפול, אכילה אלכסונית) **לא** ממומשת ב-`Piece`, אלא בנפרד ב-`MoveValidator.isValidPawnMove` (ראו בהמשך).
 
-### [`Position.java`](main/java/org/example/Position.java)
+### [`Position.java`](main/java/org/example/model/Position.java)
 
 מחלקה פשוטה שעוטפת `(row, col)`. חשוב: היא **דורסת** (`override`) את `equals()` ו-`hashCode()` כך שאפשר להשוות שתי עמדות לפי ערך (ולא לפי זהות אובייקט), ולהשתמש בהן כמפתחות ב-collections. זה קריטי כי בכל הקוד עושים הרבה `position.equals(otherPosition)`.
 
-### [`Board.java`](main/java/org/example/Board.java)
+### [`Board.java`](main/java/org/example/model/Board.java)
 
 עוטף מטריצה דו-ממדית `Piece[][] grid` בגודל `height × width` (מוסק דינמית מהקלט). פונקציות עיקריות:
 
@@ -134,7 +148,7 @@ col = x / 100;
 
 ## פענוח הלוח - BoardParser
 
-[`BoardParser.java`](main/java/org/example/BoardParser.java) הופך את שורות הטקסט הגולמיות ל-`Board` תקין:
+[`BoardParser.java`](main/java/org/example/adapters/BoardParser.java) הופך את שורות הטקסט הגולמיות ל-`Board` תקין:
 
 1. אם רשימת השורות ריקה → `ERROR ROW_WIDTH_MISMATCH`.
 2. הרוחב (`width`) נקבע לפי מספר הטוקנים בשורה **הראשונה**.
@@ -153,7 +167,7 @@ col = x / 100;
 
 זהו **הלב הפועם** של הפרויקט — האחראי על התכונה הכי ייחודית של המשחק: תנועה על ציר זמן, במקום תורות.
 
-### [`ActiveMove.java`](main/java/org/example/ActiveMove.java)
+### [`ActiveMove.java`](main/java/org/example/engine/ActiveMove.java)
 
 מייצג מהלך שעדיין "באוויר" (טרם הושלם בפועל על הלוח). שדות:
 
@@ -167,7 +181,7 @@ col = x / 100;
 
 `isComplete(currentTime)` פשוט בודק `currentTime >= arrivalTimeMillis`.
 
-### [`MovementEngine.java`](main/java/org/example/MovementEngine.java)
+### [`MovementEngine.java`](main/java/org/example/engine/MovementEngine.java)
 
 מנהל שעון גלובלי (`gameTimeMillis`) ורשימה (`List<ActiveMove> activeMoves`) של כל המהלכים שנמצאים כרגע "בדרך". שני קבועי זמן:
 
@@ -215,7 +229,7 @@ jumpStartTime == enemyStartTime
 
 ## חוקיות מהלכים - MoveValidator
 
-[`MoveValidator.java`](main/java/org/example/MoveValidator.java) קובע האם מהלך מסוים חוקי — בשילוב עם מצב הלוח הפיזי **וגם** המהלכים הפעילים כרגע (כי גם כלי "בדרך" צריך לחסום נתיב, למשל).
+[`MoveValidator.java`](main/java/org/example/rules/MoveValidationService.java) קובע האם מהלך מסוים חוקי — בשילוב עם מצב הלוח הפיזי **וגם** המהלכים הפעילים כרגע (כי גם כלי "בדרך" צריך לחסום נתיב, למשל).
 
 ### `calculateDistance(from, to)`
 
@@ -254,7 +268,7 @@ jumpStartTime == enemyStartTime
 
 ## טיפול באינטראקציה - InteractionHandler
 
-[`InteractionHandler.java`](main/java/org/example/InteractionHandler.java) הוא מכונת המצבים שמתרגמת קליקי עכבר (בפיקסלים) למהלכים בפועל. שדה יחיד לשמירת מצב: `selectedPosition` (הכלי שנבחר, אם בכלל).
+[`InteractionHandler.java`](main/java/org/example/controller/InteractionHandler.java) הוא מכונת המצבים שמתרגמת קליקי עכבר (בפיקסלים) למהלכים בפועל. שדה יחיד לשמירת מצב: `selectedPosition` (הכלי שנבחר, אם בכלל).
 
 ### `handleClick(x, y)`
 
@@ -284,7 +298,7 @@ jumpStartTime == enemyStartTime
 
 ## הבקר הראשי - GameController
 
-[`GameController.java`](main/java/org/example/GameController.java) הוא חזית (Facade) דקה בלבד. הוא בונה ומחזיק את שלושת המנועים (`MovementEngine`, `MoveValidator`, `InteractionHandler`) ומאציל אליהם כל קריאה:
+[`GameController.java`](main/java/org/example/controller/GameController.java) הוא חזית (Facade) דקה בלבד. הוא בונה ומחזיק את שלושת המנועים (`MovementEngine`, `MoveValidator`, `InteractionHandler`) ומאציל אליהם כל קריאה:
 
 ```java
 handleClick(x, y)      → interactionHandler.handleClick(x, y)
@@ -335,7 +349,4 @@ print board
 - **`isColorMoving` בודק את הצבע כולו, לא כלי בודד** — כשמנסים ליצור מהלך חדש, נבדק אם **כל** הצבע היריב נמצא בתנועה (לא רק הכלי שביעד), מה שמונע התחלת מהלך חדש בזמן שהיריב "באוויר" (משמש להגנה מפני ניצול תזמון).
 - **קפיצה מוגדרת כ-`from == to`** — מבחינה מבנית זו לא "תנועה" אמיתית אלא סימון "עמידה על המשמר" למשך שנייה.
 - **זמני "התחלה" של מהלך מחושבים לאחור** — אין שדה `startTime` מפורש ב-`ActiveMove`; בכל מקום שצריך אותו הוא מחושב כ-`arrivalTimeMillis - (distance × MOVE_DURATION_PER_SQUARE)`.
-- **שח-מט נבדק רק דרך אכילת מלך בפועל** — אין זיהוי "שח" מוקדם או חוקי הגנה על המלך; המשחק נגמר (`isGameOver`) רק כאשר מלך **נאכל בפועל** (בין אם דרך `advanceTime` ובין אם דרך `handleJump`).
-- **`BoardParser` בודק פורמט בלבד** — לא בודק תקינות שחמטית של המצב ההתחלתי (מספר מלכים, מיקומים חוקיים וכו').
-
-</div>
+- **שח-מט נ

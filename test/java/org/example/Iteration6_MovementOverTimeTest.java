@@ -1,4 +1,9 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
+import org.example.controller.GameController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -34,7 +39,7 @@ public class Iteration6_MovementOverTimeTest {
             ". . . . . . . bK"
         );
         board = BoardParser.parse(boardLines);
-        gameController = new GameController(board);
+        gameController = TestGameControllerFactory.create(board);
     }
 
     @Test
@@ -182,7 +187,7 @@ public class Iteration6_MovementOverTimeTest {
         // Place rook
         board.setPiece(0, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
         
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
         
         // Move rook 2 squares horizontally
         // Pixels: 50=0, 150=1, 250=2, 350=3
@@ -202,7 +207,7 @@ public class Iteration6_MovementOverTimeTest {
         // Knight movement is L-shape, distance calculated as max(deltaRow, deltaCol)
         board.setPiece(4, 4, new Piece(Piece.Color.WHITE, Piece.Type.KNIGHT));
         
-        GameController gc = new GameController(board);
+        GameController gc = TestGameControllerFactory.create(board);
         
         // Move knight from (4,4) to (5,6)
         // This is a valid knight L-move: deltaRow=1, deltaCol=2, distance=2

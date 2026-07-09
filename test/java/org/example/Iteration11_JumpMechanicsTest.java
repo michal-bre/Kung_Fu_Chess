@@ -1,4 +1,9 @@
 package org.example;
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+import org.example.adapters.BoardParser;
+import org.example.controller.GameController;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -37,7 +42,7 @@ public class Iteration11_JumpMechanicsTest {
                 ". . . . . . . ."
         );
         board = BoardParser.parse(boardLines);
-        gameController = new GameController(board);
+        gameController = TestGameControllerFactory.create(board);
     }
 
     @Test
@@ -98,11 +103,16 @@ public class Iteration11_JumpMechanicsTest {
         gameController.handleClick(50, 50);
         gameController.advanceTime(1000);
 
-        // White rook is removed
-        assertNull(board.getPiece(new Position(0, 0)));
+        // The white rook is captured and gone; the black rook - which won the square -
+        // now occupies the destination. (A capture removes the captured piece AND relocates
+        // the capturing piece there; it does not leave the destination empty.)
+        assertNotNull("Capturing piece should occupy the destination after a capture", board.getPiece(new Position(0, 0)));
+        assertEquals("Destination should be held by the capturing black rook", Piece.Color.BLACK, board.getPiece(new Position(0, 0)).getColor());
 
-        // Attempt jump with the removed piece (should be ignored)
-        gameController.handleJump(50, 50);
-        assertNull("Removed piece cannot initiate a jump", board.getPiece(new Position(0, 0)));
+        // The captured white rook no longer exists anywhere on the board. Its former
+        // square (0,1) was vacated by the black rook's move and is now empty, so a jump
+        // attempt aimed there - i.e. at a piece that isn't there anymore - must be a no-op.
+        gameController.handleJump(150, 50);
+        assertNull("Jumping a vacated/nonexistent piece's square should do nothing", board.getPiece(new Position(0, 1)));
     }
 }

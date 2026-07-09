@@ -1,20 +1,41 @@
-package org.example;
+package org.example.rules;
 
-public class MoveValidator {
+import org.example.model.Board;
+import org.example.model.Piece;
+import org.example.model.Position;
+
+/**
+ * Rules layer: pure move-legality logic.
+ *
+ * Depends ONLY on the model (Board, Piece, Position) plus its own
+ * ActiveMoveQuery port. It has zero knowledge of:
+ * - How moves are scheduled or how time works (that's the engine layer)
+ * - How the UI receives or displays commands (that's the adapters layer)
+ * - Any concrete engine implementation
+ *
+ * Because the only "engine" capability this service needs is a yes/no
+ * occupancy check, that need is expressed as the rules-owned ActiveMoveQuery
+ * interface (see that file for the Dependency Inversion rationale). This is
+ * what makes it possible to unit test move validation with a trivial fake
+ * ActiveMoveQuery, without ever constructing a MovementEngine.
+ */
+public class MoveValidationService implements MoveValidationPort {
     private final Board board;
-    private final MovementEngine movementEngine;
+    private final ActiveMoveQuery activeMoveQuery;
 
-    public MoveValidator(Board board, MovementEngine movementEngine) {
+    public MoveValidationService(Board board, ActiveMoveQuery activeMoveQuery) {
         this.board = board;
-        this.movementEngine = movementEngine;
+        this.activeMoveQuery = activeMoveQuery;
     }
 
+    @Override
     public int calculateDistance(Position from, Position to) {
         int deltaRow = Math.abs(to.getRow() - from.getRow());
         int deltaCol = Math.abs(to.getCol() - from.getCol());
         return Math.max(deltaRow, deltaCol);
     }
 
+    @Override
     public boolean isPathClearWithActiveMoves(Position from, Position to, Piece.Color pieceColor) {
         int startRow = from.getRow();
         int startCol = from.getCol();
@@ -31,7 +52,7 @@ public class MoveValidator {
             Position currentPos = new Position(currentRow, currentCol);
 
             if (board.getPiece(currentPos) != null) return false;
-            if (movementEngine.isSquareOccupiedByActiveMove(currentPos, pieceColor)) return false;
+            if (activeMoveQuery.isSquareOccupiedByActiveMove(currentPos, pieceColor)) return false;
 
             currentRow += stepRow;
             currentCol += stepCol;
@@ -39,6 +60,7 @@ public class MoveValidator {
         return true;
     }
 
+    @Override
     public boolean isValidMove(Position from, Position to, Piece piece) {
         if (from.equals(to)) return false;
 
@@ -53,7 +75,7 @@ public class MoveValidator {
 
         Piece targetPiece = board.getPiece(to);
         if (targetPiece != null && targetPiece.getColor() == piece.getColor()) return false;
-        if (movementEngine.isSquareOccupiedByActiveMove(to, piece.getColor())) return false;
+        if (activeMoveQuery.isSquareOccupiedByActiveMove(to, piece.getColor())) return false;
 
         if (piece.getType() != Piece.Type.KNIGHT) {
             if (!isPathClearWithActiveMoves(from, to, piece.getColor())) return false;
@@ -72,31 +94,26 @@ public class MoveValidator {
         int startingRow = (pawn.getColor() == Piece.Color.WHITE) ? (board.getHeight() - 2) : 1;
         Piece targetPiece = board.getPiece(to);
 
-        // Check for blocked moves
-        if (movementEngine.isSquareOccupiedByActiveMove(to, pawn.getColor())) {
+        if (activeMoveQuery.isSquareOccupiedByActiveMove(to, pawn.getColor())) {
             return false;
         }
-        
+
         if (targetPiece != null && targetPiece.getColor() == pawn.getColor()) {
             return false;
         }
 
-        // Vertical movement (no column change) - must move forward only
         if (deltaCol == 0) {
-            // Must move in the correct direction
             if (deltaRow != direction && deltaRow != 2 * direction) {
                 return false;
             }
-            
-            // One square forward
+
             if (absRow == 1) {
                 return targetPiece == null;
             }
 
-            // Two squares forward from starting position
             if (absRow == 2 && from.getRow() == startingRow) {
                 Position middlePos = new Position(from.getRow() + direction, from.getCol());
-                if (board.getPiece(middlePos) != null || movementEngine.isSquareOccupiedByActiveMove(middlePos, pawn.getColor())) {
+                if (board.getPiece(middlePos) != null || activeMoveQuery.isSquareOccupiedByActiveMove(middlePos, pawn.getColor())) {
                     return false;
                 }
                 return targetPiece == null;
@@ -104,7 +121,6 @@ public class MoveValidator {
             return false;
         }
 
-        // Capture movement - can capture any adjacent enemy
         if (absRow <= 1 && absCol <= 1 && !(absRow == 0 && absCol == 0)) {
             return targetPiece != null && targetPiece.getColor() != pawn.getColor();
         }

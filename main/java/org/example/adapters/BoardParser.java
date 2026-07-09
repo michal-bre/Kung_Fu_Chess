@@ -1,8 +1,16 @@
-package org.example;
+package org.example.adapters;
 
-import java.util.ArrayList;
+import org.example.model.Board;
+import org.example.model.Piece;
+
 import java.util.List;
 
+/**
+ * Adapters layer: turns raw text input into a validated Board.
+ * Parsing an external text format into the domain model is an input-adapter
+ * concern, so this lives alongside CommandLineAdapter rather than inside the
+ * model layer.
+ */
 public class BoardParser {
 
     // Parses raw text lines into a validated Board object

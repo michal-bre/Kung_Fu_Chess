@@ -1,5 +1,8 @@
-package org.example;
+package org.example.model;
 
+/**
+ * Model layer: pure value object, zero dependencies on any other layer.
+ */
 public class Position {
     private final int row;
     private final int col;
@@ -31,4 +34,3 @@ public class Position {
         return 31 * row + col;
     }
 }
-
