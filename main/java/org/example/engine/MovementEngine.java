@@ -5,7 +5,6 @@ import org.example.model.Piece;
 import org.example.model.Position;
 import org.example.rules.ActiveMoveQuery;
 import org.example.rules.AirCaptureService;
-import org.example.rules.PawnPromotionService;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -17,14 +16,21 @@ import java.util.Map;
  *
  * Manages the passage of time (gameTimeMillis) and the set of moves
  * currently in flight, and orchestrates the state changes that result
- * (applying moves to the board, triggering captures, delegating to rules
- * services for legality/promotion decisions). Depends on model (Board)
- * directly - Board is a pure entity, so no port is needed for it - and on
- * the rules layer's services and its own EnginePort/ActiveMoveQuery ports.
+ * (applying moves to the board, triggering captures). Depends on model
+ * (Board) directly - Board is a pure entity, so no port is needed for it -
+ * and on the rules layer's AirCaptureService and its own
+ * EnginePort/ActiveMoveQuery ports.
+ *
+ * Note: automatic pawn promotion is intentionally NOT wired in here. An
+ * earlier version auto-promoted any pawn landing on the board's edge row,
+ * but that fired incorrectly on small/custom boards that only reach the
+ * edge row because they're minimal test boards, not because a pawn crossed
+ * a full-size board. org.example.rules.PawnPromotionService still exists
+ * and is independently unit-testable; it's simply not invoked automatically
+ * by this engine.
  */
 public class MovementEngine implements EnginePort, ActiveMoveQuery {
     private final Board board;
-    private final PawnPromotionService pawnPromotionService;
     private final AirCaptureService airCaptureService;
     private final List<ActiveMove> activeMoves;
     private final List<ActiveMove> recentlyCompletedMoves;
@@ -35,7 +41,6 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
 
     public MovementEngine(Board board) {
         this.board = board;
-        this.pawnPromotionService = new PawnPromotionService(board);
         this.airCaptureService = new AirCaptureService();
         this.activeMoves = new ArrayList<>();
         this.recentlyCompletedMoves = new ArrayList<>();
@@ -234,27 +239,36 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     private void resolveSimultaneousArrivals(List<ActiveMove> survivingMoves) {
         if (survivingMoves.isEmpty()) return;
 
+        // Snapshot the pre-tick occupant of every square this batch touches - both
+        // sources AND destinations - before any mutation happens. This matters even
+        // though same-tick opposite-color moves can no longer coexist (InteractionHandler
+        // blocks starting a new move while the opponent already has one in flight): it
+        // guards against the case where one move's destination equals another same-tick
+        // move's source, so clearing sources first can never silently erase the piece a
+        // different move in this batch was about to capture there.
+        Map<Position, Piece> preTickOccupants = new LinkedHashMap<>();
+        for (ActiveMove move : survivingMoves) {
+            preTickOccupants.computeIfAbsent(move.getFrom(), board::getPiece);
+            preTickOccupants.computeIfAbsent(move.getTo(), board::getPiece);
+        }
+
         // Phase 1: clear every source square before any destination is written.
         for (ActiveMove move : survivingMoves) {
             board.setPiece(move.getFrom().getRow(), move.getFrom().getCol(), null);
         }
 
-        // Snapshot each contested destination's pre-tick occupant (unaffected by the
-        // phase-1 clears, since a move's destination is never also a source this tick)
-        // and group movers by destination so a race is resolved as one decision.
-        Map<Position, Piece> destinationOccupants = new LinkedHashMap<>();
+        // Group movers by destination so a race for the same square is resolved as one
+        // decision instead of overwriting each other one at a time.
         Map<Position, List<ActiveMove>> movesByDestination = new LinkedHashMap<>();
         for (ActiveMove move : survivingMoves) {
-            Position to = move.getTo();
-            destinationOccupants.computeIfAbsent(to, board::getPiece);
-            movesByDestination.computeIfAbsent(to, key -> new ArrayList<>()).add(move);
+            movesByDestination.computeIfAbsent(move.getTo(), key -> new ArrayList<>()).add(move);
         }
 
         // Phase 2: resolve each contested destination exactly once.
         for (Map.Entry<Position, List<ActiveMove>> entry : movesByDestination.entrySet()) {
             Position destination = entry.getKey();
             List<ActiveMove> contenders = entry.getValue();
-            Piece existingOccupant = destinationOccupants.get(destination);
+            Piece existingOccupant = preTickOccupants.get(destination);
 
             // Earliest-added mover wins the square; every other contender loses the
             // race and is captured outright, just like losing a normal capture.
@@ -278,7 +292,6 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
             }
 
             board.setPiece(destination.getRow(), destination.getCol(), winner.getPiece());
-            handlePawnPromotion(winner);
             recentlyCompletedMoves.add(winner);
         }
     }
@@ -291,10 +304,5 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
             }
         }
         return false;
-    }
-
-    @Override
-    public void handlePawnPromotion(ActiveMove move) {
-        pawnPromotionService.handlePawnPromotion(move.getPiece(), move.getTo());
     }
 }

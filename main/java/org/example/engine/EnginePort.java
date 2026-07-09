@@ -27,14 +27,6 @@ public interface EnginePort {
     boolean isSquareOccupiedByActiveMove(Position pos, Piece.Color movingColor);
     boolean isPieceJustCompleted(Position pos);
 
-    /**
-     * Applies pawn-promotion rules for a move that just landed on the board.
-     * Exposed on the port (rather than requiring the controller to downcast
-     * to the concrete MovementEngine) so InteractionHandler never needs to
-     * know MovementEngine exists.
-     */
-    void handlePawnPromotion(ActiveMove move);
-
     List<ActiveMove> getActiveMoves();
     long getGameTimeMillis();
     boolean isGameOver();

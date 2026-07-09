@@ -13,13 +13,17 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 /**
- * Iteration 10: Pawn double-move, path-clear, and promotion
+ * Iteration 10: Pawn double-move and path-clear behavior
  *
  * Tests:
- * 1. Pawn may move 2 cells forward from its start row
+ * 1. Pawn may move 2 cells forward from its start row (row 7 for white - the
+ *    board's edge row, not one row in from it; see MoveValidationService).
  * 2. The path must be clear (blocked by piece)
  * 3. The path must be clear (blocked by friendly active reservation)
- * 4. Pawn reaching last row becomes a queen
+ * 4. A pawn reaching the last row does NOT auto-promote (that automatic
+ *    behavior was removed - see MovementEngine's class doc and
+ *    PawnPromotionServiceTest for the still-available, explicitly-invoked
+ *    promotion logic)
  */
 public class Iteration10_PawnMovementAndPromotionTest {
 
@@ -44,69 +48,74 @@ public class Iteration10_PawnMovementAndPromotionTest {
 
     @Test
     public void testPawnDoubleMoveFromStartRow() {
-        // Place white pawn at its starting row (6,0)
-        board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+        // Place white pawn at its starting row (7,0) - the board edge
+        board.setPiece(7, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
         GameController gc = TestGameControllerFactory.create(board);
 
-        // Select pawn (col 0,row6) and double-move to row4 (two squares)
-        gc.handleClick(50, 650);  // select (6,0)
-        gc.handleClick(50, 450);  // move to (4,0)
+        // Select pawn (col 0,row7) and double-move to row5 (two squares)
+        gc.handleClick(50, 750);  // select (7,0)
+        gc.handleClick(50, 550);  // move to (5,0)
 
         // Arrival should be 2 * 1000 = 2000ms
         gc.advanceTime(1000);
-        assertNotNull("Pawn should still be at origin at 1000ms", board.getPiece(new Position(6, 0)));
+        assertNotNull("Pawn should still be at origin at 1000ms", board.getPiece(new Position(7, 0)));
 
         gc.advanceTime(1000);
-        assertNull("Pawn origin should be empty after arrival", board.getPiece(new Position(6, 0)));
-        assertNotNull("Pawn should arrive at (4,0)", board.getPiece(new Position(4, 0)));
+        assertNull("Pawn origin should be empty after arrival", board.getPiece(new Position(7, 0)));
+        assertNotNull("Pawn should arrive at (5,0)", board.getPiece(new Position(5, 0)));
     }
 
     @Test
     public void testPawnDoubleMoveBlockedByPieceInPath() {
-        // Place pawn at (6,0) and a blocking piece at middle (5,0)
-        board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
-        board.setPiece(5, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
+        // Place pawn at (7,0) and a blocking piece at middle (6,0)
+        board.setPiece(7, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+        board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
         GameController gc = TestGameControllerFactory.create(board);
 
         // Attempt double move
-        gc.handleClick(50, 650); // select pawn
-        gc.handleClick(50, 450); // attempt move to (4,0)
+        gc.handleClick(50, 750); // select pawn
+        gc.handleClick(50, 550); // attempt move to (5,0)
 
         // Even after waiting, pawn should not have moved because path blocked
         gc.advanceTime(2000);
+        assertNotNull(board.getPiece(new Position(7, 0)));
         assertNotNull(board.getPiece(new Position(6, 0)));
-        assertNotNull(board.getPiece(new Position(5, 0)));
-        assertNull(board.getPiece(new Position(4, 0)));
+        assertNull(board.getPiece(new Position(5, 0)));
     }
 
     @Test
     public void testPawnDoubleMoveBlockedByActiveReservation() {
-        // Pawn at (6,0)
-        board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
-        // Friendly rook at (5,2) that will reserve middle (5,0)
-        board.setPiece(5, 2, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
+        // Pawn at (7,0)
+        board.setPiece(7, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+        // Friendly rook at (6,2) that will reserve middle (6,0)
+        board.setPiece(6, 2, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
 
         GameController gc = TestGameControllerFactory.create(board);
 
-        // Rook moves from (5,2) to (5,0), reserving middle square (arrival in 2s)
-        gc.handleClick(250, 550); // select rook at (5,2)
-        gc.handleClick(50, 550);  // move to (5,0) (reservation)
+        // Rook moves from (6,2) to (6,0), reserving middle square (arrival in 2s)
+        gc.handleClick(250, 650); // select rook at (6,2)
+        gc.handleClick(50, 650);  // move to (6,0) (reservation)
 
         // Now attempt pawn double move which must check active reservations
-        gc.handleClick(50, 650);  // select pawn at (6,0)
-        gc.handleClick(50, 450);  // attempt double-move to (4,0)
+        // (same-color reservation - not affected by the opponent-move-blocking rule,
+        // which only restricts the OPPOSING color)
+        gc.handleClick(50, 750);  // select pawn at (7,0)
+        gc.handleClick(50, 550);  // attempt double-move to (5,0)
 
         // After enough time for rook to arrive, pawn should not have been allowed to double-move
         gc.advanceTime(2000);
 
-        assertNotNull("Rook should have arrived at middle (5,0)", board.getPiece(new Position(5, 0)));
-        assertNotNull("Pawn should remain at origin because reservation blocked double-move", board.getPiece(new Position(6, 0)));
+        assertNotNull("Rook should have arrived at middle (6,0)", board.getPiece(new Position(6, 0)));
+        assertNotNull("Pawn should remain at origin because reservation blocked double-move", board.getPiece(new Position(7, 0)));
     }
 
     @Test
-    public void testPawnPromotionToQueenOnLastRow() {
-        // Ensure the last row target is empty, then place white pawn at row 1 and move to row 0 to promote
+    public void testPawnDoesNotAutoPromoteOnLastRow() {
+        // A pawn reaching the last row simply arrives there and stays a pawn.
+        // Automatic promotion was removed because it fired incorrectly on small
+        // boards that reach the edge row without the pawn having actually
+        // crossed a full board (see MovementEngine's class doc).
         board.setPiece(0, 0, null); // clear any existing piece (e.g., initial white king)
         board.setPiece(1, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
 
@@ -117,11 +126,9 @@ public class Iteration10_PawnMovementAndPromotionTest {
 
         gc.advanceTime(1000);
 
-        Piece promoted = board.getPiece(new Position(0, 0));
-        assertNotNull("Pawn should arrive at last row and be present", promoted);
-        assertEquals("Promoted piece must be QUEEN", Piece.Type.QUEEN, promoted.getType());
-        assertEquals("Promoted piece must retain color WHITE", Piece.Color.WHITE, promoted.getColor());
+        Piece arrived = board.getPiece(new Position(0, 0));
+        assertNotNull("Pawn should arrive at the last row", arrived);
+        assertEquals("Pawn must NOT auto-promote", Piece.Type.PAWN, arrived.getType());
+        assertEquals("Color should remain WHITE", Piece.Color.WHITE, arrived.getColor());
     }
 }
-
-

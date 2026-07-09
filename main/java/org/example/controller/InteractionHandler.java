@@ -55,9 +55,14 @@ public class InteractionHandler {
                 selectedPosition = clickedPos;
             }
         } else {
-            // Allow different colors to move to the same target (they may race). Only block if
-            // the target is reserved by an active move of the SAME color.
-            if (!engine.isSquareOccupiedByActiveMove(clickedPos, selectedPiece.getColor()) &&
+            Piece.Color opponentColor = (selectedPiece.getColor() == Piece.Color.WHITE) ? Piece.Color.BLACK : Piece.Color.WHITE;
+
+            // A new move cannot be created while the opponent already has a move in
+            // flight (jumps are exempt - isColorMoving ignores them): only one side may
+            // be actively moving at a time. This also blocks the target square if it's
+            // already reserved by an active move of the SAME color.
+            if (!engine.isColorMoving(opponentColor) &&
+                !engine.isSquareOccupiedByActiveMove(clickedPos, selectedPiece.getColor()) &&
                 moveValidationService.isValidMove(selectedPosition, clickedPos, selectedPiece)) {
                 int distance = moveValidationService.calculateDistance(selectedPosition, clickedPos);
                 long totalTravelTime = distance * EnginePort.MOVE_DURATION_PER_SQUARE;
@@ -104,7 +109,6 @@ public class InteractionHandler {
             }
 
             board.movePiece(threateningEnemyMove.getFrom(), threateningEnemyMove.getTo());
-            engine.handlePawnPromotion(threateningEnemyMove);
 
             engine.removeMove(threateningEnemyMove);
             selectedPosition = null;

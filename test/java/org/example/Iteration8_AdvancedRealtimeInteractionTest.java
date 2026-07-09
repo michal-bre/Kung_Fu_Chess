@@ -20,7 +20,7 @@ import static org.junit.Assert.*;
  * 2. Invalid premove — trying to premove into a square already reserved by a friendly active move is rejected
  * 3. Friendly-piece landing — cannot move onto a square already occupied by a friendly piece
  * 4. Jump after move started — jumping after an enemy move has already started causes the enemy move to be executed immediately
- * 5. Simultaneous conflicting moves to same square (different colors) — both origins cleared and the destination is occupied by one piece
+ * 5. A new move cannot be created for one color while the opponent already has a move in flight — only one side may be actively moving at a time
  */
 public class Iteration8_AdvancedRealtimeInteractionTest {
 
@@ -127,29 +127,34 @@ public class Iteration8_AdvancedRealtimeInteractionTest {
     }
 
     @Test
-    public void testSimultaneousDifferentColorToSameSquare() {
+    public void testOpponentCannotStartMoveWhileColorIsActive() {
         // Place a white rook at (0,0) and a black rook at (0,2)
         board.setPiece(0, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
         board.setPiece(0, 2, new Piece(Piece.Color.BLACK, Piece.Type.ROOK));
 
         GameController gc = TestGameControllerFactory.create(board);
 
-        // Both attempt to move to (0,1) simultaneously
+        // White starts moving to (0,1) first.
         gc.handleClick(50, 50);   // select white rook at (0,0)
         gc.handleClick(150, 50);  // move to (0,1)
 
+        // Black attempts to move to the same square while white's move is still in
+        // flight. Since only one color may have an active move at a time, black's
+        // move is never created - the click just selects the rook and the follow-up
+        // click resets selection without producing an ActiveMove.
         gc.handleClick(250, 50);  // select black rook at (0,2)
-        gc.handleClick(150, 50);  // move to (0,1)
+        gc.handleClick(150, 50);  // attempt (blocked) move to (0,1)
 
-        // Advance time until arrival
+        // Advance time until white's move arrives.
         gc.advanceTime(1000);
 
-        // Both origins should be cleared
-        assertNull(board.getPiece(new Position(0, 0)));
-        assertNull(board.getPiece(new Position(0, 2)));
+        // White's origin is cleared and it occupies the destination.
+        assertNull("White origin should be cleared once its move completes", board.getPiece(new Position(0, 0)));
+        assertNotNull("White should occupy the destination", board.getPiece(new Position(0, 1)));
+        assertEquals(Piece.Color.WHITE, board.getPiece(new Position(0, 1)).getColor());
 
-        // Destination should be occupied by one piece of some color (race resolved deterministically by insertion order)
-        assertNotNull("Destination must be occupied by one of the movers", board.getPiece(new Position(0, 1)));
+        // Black's rook never moved at all, since its move was blocked at creation time.
+        assertNotNull("Black rook should remain at its original square - its move was blocked", board.getPiece(new Position(0, 2)));
+        assertEquals(Piece.Color.BLACK, board.getPiece(new Position(0, 2)).getColor());
     }
 }
-

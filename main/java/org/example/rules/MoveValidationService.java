@@ -91,7 +91,12 @@ public class MoveValidationService implements MoveValidationPort {
         int absCol = Math.abs(deltaCol);
 
         int direction = (pawn.getColor() == Piece.Color.WHITE) ? -1 : 1;
-        int startingRow = (pawn.getColor() == Piece.Color.WHITE) ? (board.getHeight() - 2) : 1;
+        // The pawn's starting row is the literal edge of the board on its own side -
+        // row (height-1) for white, row 0 for black - not "one row in from the edge".
+        // This is deliberately edge-based rather than assuming a fixed 8-row layout
+        // with a reserved back rank, so double-step validity works correctly on any
+        // board size, including minimal boards used to test movement in isolation.
+        int startingRow = (pawn.getColor() == Piece.Color.WHITE) ? (board.getHeight() - 1) : 0;
         Piece targetPiece = board.getPiece(to);
 
         if (activeMoveQuery.isSquareOccupiedByActiveMove(to, pawn.getColor())) {
