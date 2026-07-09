@@ -83,46 +83,62 @@ public class Main {
 
     // Helper method to parse and route commands to the GameController
     private static void executeCommand(String commandLine, GameController gameController) {
-        String lowerCommand = commandLine.toLowerCase();
+        CommandType commandType = CommandType.fromString(commandLine);
 
-        if (lowerCommand.equals("print board")) {
-            gameController.printBoard();
+        if (commandType == null) {
+            return;
         }
-        else if (lowerCommand.startsWith("click ")) {
-            // Split by spaces, expected format: click <x> <y>
-            String[] tokens = commandLine.split("\\s+");
-            if (tokens.length == 3) {
-                try {
-                    int x = Integer.parseInt(tokens[1]);
-                    int y = Integer.parseInt(tokens[2]);
-                    gameController.handleClick(x, y);
-                } catch (NumberFormatException e) {
-                    // Soft ignore or log if parsing fails (VPL input is usually well-formed)
-                }
+
+        switch (commandType) {
+            case PRINT_BOARD:
+                gameController.printBoard();
+                break;
+            case CLICK:
+                handleClickCommand(commandLine, gameController);
+                break;
+            case JUMP:
+                handleJumpCommand(commandLine, gameController);
+                break;
+            case WAIT:
+                handleWaitCommand(commandLine, gameController);
+                break;
+        }
+    }
+
+    private static void handleClickCommand(String commandLine, GameController gameController) {
+        String[] tokens = commandLine.split("\\s+");
+        if (tokens.length == 3) {
+            try {
+                int x = Integer.parseInt(tokens[1]);
+                int y = Integer.parseInt(tokens[2]);
+                gameController.handleClick(x, y);
+            } catch (NumberFormatException e) {
+                // Soft ignore or log if parsing fails (VPL input is usually well-formed)
             }
         }
-        else if (lowerCommand.startsWith("jump ")) {
-            String[] tokens = commandLine.split("\\s+");
-            if (tokens.length == 3) {
-                try {
-                    int x = Integer.parseInt(tokens[1]);
-                    int y = Integer.parseInt(tokens[2]);
-                    gameController.handleJump(x, y);
-                } catch (NumberFormatException e) {
-                    // Soft ignore
-                }
+    }
+
+    private static void handleJumpCommand(String commandLine, GameController gameController) {
+        String[] tokens = commandLine.split("\\s+");
+        if (tokens.length == 3) {
+            try {
+                int x = Integer.parseInt(tokens[1]);
+                int y = Integer.parseInt(tokens[2]);
+                gameController.handleJump(x, y);
+            } catch (NumberFormatException e) {
+                // Soft ignore
             }
         }
-        else if (lowerCommand.startsWith("wait ")) {
-            // Split by spaces, expected format: wait <ms>
-            String[] tokens = commandLine.split("\\s+");
-            if (tokens.length == 2) {
-                try {
-                    long ms = Long.parseLong(tokens[1]);
-                    gameController.advanceTime(ms);
-                } catch (NumberFormatException e) {
-                    // Soft ignore if parsing fails
-                }
+    }
+
+    private static void handleWaitCommand(String commandLine, GameController gameController) {
+        String[] tokens = commandLine.split("\\s+");
+        if (tokens.length == 2) {
+            try {
+                long ms = Long.parseLong(tokens[1]);
+                gameController.advanceTime(ms);
+            } catch (NumberFormatException e) {
+                // Soft ignore if parsing fails
             }
         }
     }
