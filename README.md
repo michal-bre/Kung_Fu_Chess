@@ -1,352 +1,147 @@
-<div dir="rtl" align="right" style="direction: rtl; text-align: right;">
-
 # Kung Fu Chess
 
-תיעוד מלא ומפורט של הפרויקט בעברית — מסביר מה כל קובץ עושה, איך הזרימה עובדת, ומה ההיגיון מאחורי כל מנגנון.
+A real-time chess variant with no turns: both sides can move simultaneously, and every move takes real (simulated) time to complete instead of resolving instantly. A piece sent to a square is "in flight" for a duration proportional to the distance it travels, which opens the door to race conditions, mid-air captures, and defensive "jumps" that have no equivalent in standard turn-based chess.
 
-> **הערה:** התיעוד הזה מתמקד בקוד הראשי (`src/main/java`). קבצי הבדיקות (`src/test`) אינם חלק מהתיעוד הזה.
+The game runs as a console program: it reads a board layout and a list of commands from `stdin`, and prints results to `stdout`.
 
----
-
-## תוכן עניינים
-
-1. [מה זה קונג פו שחמט](#מה-זה-קונג-פו-שחמט)
-2. [מבנה הפרויקט](#מבנה-הפרויקט)
-3. [פורמט הקלט והפלט](#פורמט-הקלט-והפלט)
-4. [מודל הנתונים הבסיסי](#מודל-הנתונים-הבסיסי)
-5. [פענוח הלוח - BoardParser](#פענוח-הלוח---boardparser)
-6. [מנוע הזמן - MovementEngine](#מנוע-הזמן---movementengine)
-7. [חוקיות מהלכים - MoveValidator](#חוקיות-מהלכים---movevalidator)
-8. [טיפול באינטראקציה - InteractionHandler](#טיפול-באינטראקציה---interactionhandler)
-9. [הבקר הראשי - GameController](#הבקר-הראשי---gamecontroller)
-10. [דוגמאות זרימה מלאות](#דוגמאות-זרימה-מלאות)
-11. [נקודות עדינות וגבוליות שכדאי להכיר](#נקודות-עדינות-וגבוליות-שכדאי-להכיר)
+> תיעוד מלא בעברית זמין ב-[`README.he.md`](README.he.md). קובץ הסבר טכני מעמיק, קובץ-אחר-קובץ, זמין ב-[`ARCHITECTURE.he.md`](ARCHITECTURE.he.md).
 
 ---
 
-## מה זה קונג פו שחמט
+## Architecture
 
-זהו משחק שחמט **בלי תורות**. בשחמט רגיל השחקנים מזיזים כלים לסירוגין. כאן **שני הצדדים יכולים לזוז בו-זמנית**, וכל מהלך אורך **זמן אמיתי** (מדומה, במילישניות) שתלוי במרחק שהכלי עובר. כלי שנשלח לתנועה לא מגיע ליעדו מיד — הוא "בדרך" עד שחולף מספיק זמן.
-
-הפרויקט מומש כתוכנית **קונסולה** (ללא ממשק גרפי) שקוראת פקודות טקסטואליות מ-`stdin` ומדפיסה תוצאות ל-`stdout`. הערה בקוד (`Main.java`) מרמזת שזה נבנה לצורך הגשה ובדיקה אוטומטית בפלטפורמה מסוג VPL (Virtual Programming Lab), נפוצה בקורסים אקדמיים.
-
----
-
-## מבנה הפרויקט
-
-הפרויקט אורגן מחדש (Clean Architecture) לארבע שכבות מנותקות, פלוס שכבת adapters/חיבור בחוץ:
+The codebase is organized around **Clean Architecture**, split into four strictly decoupled layers plus an outer adapters layer for I/O. Each layer only knows about the layers "inside" it — dependencies always point inward, toward the model:
 
 ```
-Kung_Fu_Chess/
-└── main/java/org/example/
-    ├── Main.java                       # Composition root: קורא stdin, מרכיב את כל התלויות, מנתב פקודות
-    ├── model/                          # ישויות דומיין טהורות, אפס תלויות
-    │   ├── Board.java
-    │   ├── Piece.java
-    │   └── Position.java
-    ├── rules/                          # לוגיקת חוקיות, תלויה רק ב-model
-    │   ├── MoveValidationService.java  # (היורש של MoveValidator הישן)
-    │   ├── PawnPromotionService.java
-    │   ├── AirCaptureService.java
-    │   ├── ActiveMoveQuery.java        # port בבעלות rules (DIP מול engine)
-    │   └── MoveValidationPort.java     # port בבעלות rules (לשימוש controller)
-    ├── engine/                         # ניהול זמן/מצב בזמן-אמת
-    │   ├── MovementEngine.java
-    │   ├── ActiveMove.java
-    │   └── EnginePort.java             # port בבעלות engine (לשימוש controller)
-    ├── controller/                     # נקודת כניסה/תיאום, DI מלא דרך constructor
-    │   ├── GameController.java
-    │   └── InteractionHandler.java
-    └── adapters/                       # קלט/פלט (מחוץ לארבע השכבות)
-        ├── BoardParser.java
-        ├── BoardPresenter.java
-        ├── CommandLineAdapter.java
-        └── CommandType.java
+main/java/org/example/
+├── Main.java              # Composition root: wires every dependency by hand
+├── model/                 # Pure domain entities — zero dependencies
+│   ├── Board.java
+│   ├── Piece.java
+│   └── Position.java
+├── rules/                 # Business rules & move validation — depends only on model
+│   ├── MoveValidationService.java
+│   ├── PawnPromotionService.java
+│   ├── AirCaptureService.java
+│   ├── ActiveMoveQuery.java
+│   └── MoveValidationPort.java
+├── engine/                 # Real-time state management & synchronization
+│   ├── MovementEngine.java
+│   ├── ActiveMove.java
+│   └── EnginePort.java
+├── controller/             # Command routing / application coordination
+│   ├── GameController.java
+│   └── InteractionHandler.java
+└── adapters/                # Input/output (console)
+    ├── BoardParser.java
+    ├── BoardPresenter.java
+    ├── CommandLineAdapter.java
+    └── CommandType.java
 ```
 
-זהו פרויקט **Java** נטול Maven/Gradle (מתקומפל ישירות). התלויות (`JUnit`, `Hamcrest`) נמצאות תחת `lib/` ומשמשות רק לבדיקות.
+| Layer | Responsibility | Allowed to depend on |
+|---|---|---|
+| **Model** | Pure domain objects (`Board`, `Piece`, `Position`) with no behavior tied to timing, I/O, or rules. | *Nothing* |
+| **Rules** | Business rules and move validation — legality checks, pawn promotion, capture-on-collision logic. | Model |
+| **Engine** | Real-time state management: the game clock, in-flight moves, and synchronization between simultaneous actions. | Model, Rules |
+| **Controller** | Application entry point — routes commands to the engine and rules layers through interfaces (ports), never through concrete classes. | Model, Rules (via ports), Engine (via ports) |
+| **Adapters** | Console I/O: parsing input, printing the board. Kept entirely outside the four core layers. | Everything |
+
+This separation matters for a few concrete reasons:
+
+- **Testability.** The `rules` layer can be unit tested with plain model objects and a one-line fake port — no engine, no controller, no I/O required. The `engine` layer can be tested with a real board and no controller at all.
+- **No hidden coupling.** None of `model`, `rules`, `engine`, or `controller` contain a single `System.out` call or any knowledge of how input arrives. All console I/O lives in `adapters`.
+- **Swappable front end.** Because `GameController` only depends on `EnginePort` and `MoveValidationPort` — never on `MovementEngine` or `MoveValidationService` directly — the console adapter could be replaced with a GUI, a web socket handler, or an AI client without touching a single line of game logic.
 
 ---
 
-## פורמט הקלט והפלט
+## Features
 
-כל הלוגיקה של קריאת קלט נמצאת ב-[`Main.java`](main/java/org/example/Main.java). התוכנית קוראת מ-`stdin` טקסט במבנה קבוע:
+- **Real-time, turn-free movement** — every move has a duration based on distance traveled (`MOVE_DURATION_PER_SQUARE`), and the board only updates once a move actually lands.
+- **Race-condition handling** — when two pieces of different colors are sent to the same square in the same tick, the engine resolves the collision deterministically instead of corrupting board state: every source square is cleared first, then destinations are resolved as a group, so the earliest-added move wins the square and the loser is captured.
+- **Air captures via jumps** — a piece can "jump" in place to guard a square, intercepting an enemy move that lands there while the jump is active.
+- **Test-driven development (TDD)** — the project has an extensive JUnit test suite (11 iteration-based test classes covering parsing, movement, blockers, pawn rules, timing, jumps, and game-over conditions) written and extended alongside the implementation.
+- **Dependency-inverted design** — `rules` defines the narrow interfaces (`ActiveMoveQuery`, `MoveValidationPort`) it needs from the outer layers instead of depending on them directly, so the dependency graph always points toward the domain, never away from it.
+
+---
+
+## Game commands
+
+The program reads a board section and a commands section from `stdin`:
 
 ```
 Board:
-<שורת לוח 1>
-<שורת לוח 2>
+<board row 1>
+<board row 2>
 ...
 Commands:
-<פקודה 1>
-<פקודה 2>
+<command 1>
+<command 2>
 ...
 ```
 
-התוכנית עוברת שורה-שורה, ומזהה את המילים `Board:` ו-`Commands:` (לא תלוית רישיות) כדי לדעת לאיזו רשימה לשייך כל שורה שאחריהן. שורות ריקות מדולגות.
+Board rows use `wK`/`bK`-style tokens (`w`/`b` for color, `K/Q/R/N/B/P` for piece type) and `.` for an empty square.
 
-### הפקודות הנתמכות
-
-| פקודה | תיאור |
+| Command | Description |
 |---|---|
-| `print board` | מדפיס את מצב הלוח הנוכחי |
-| `click X Y` | קליק בקואורדינטות **פיקסלים** (X, Y) |
-| `jump X Y` | קפיצה בקואורדינטות פיקסלים (X, Y) |
-| `wait MS` | מקדם את זמן המשחק ב-MS מילישניות |
+| `print board` | Prints the current board state |
+| `click X Y` | Clicks at **pixel** coordinates `(X, Y)` — selects a piece, or attempts a move if a piece is already selected |
+| `jump X Y` | Performs a defensive jump at pixel coordinates `(X, Y)` |
+| `wait MS` | Advances the game clock by `MS` milliseconds |
 
-חשוב להבין: `X` ו-`Y` הן קואורדינטות **פיקסלים** של מסך גרפי מדומה, לא אינדקסים של שורה/עמודה בלוח! ההמרה מתבצעת מאוחר יותר לפי `Board.CELL_SIZE = 100`:
+`X`/`Y` are pixel coordinates on a simulated grid, converted to board cells via `row = Y / Board.CELL_SIZE` and `col = X / Board.CELL_SIZE` (`CELL_SIZE = 100`).
 
-```java
-row = y / 100;
-col = x / 100;
-```
-
-כלומר קליק על `click 250 150` מתורגם ל-`row = 1, col = 2`.
-
-לאחר קריאת כל השורות, `Main` מפעיל:
-1. `BoardParser.parse(boardLines)` — יוצר `Board` מאומת.
-2. `new GameController(board)` — מאתחל את כל מנועי המשחק.
-3. לולאה שמריצה כל פקודה על ה-`GameController`.
-
-אם `BoardParser` מזהה לוח פגום, הוא זורק `IllegalArgumentException` עם הודעת שגיאה קבועה (למשל `ERROR ROW_WIDTH_MISMATCH`), וההודעה מודפסת ישירות. פורמט השגיאות הקבוע מרמז שזו בדיקה אוטומטית שמצפה לטקסט מדויק.
-
----
-
-## מודל הנתונים הבסיסי
-
-### [`Piece.java`](main/java/org/example/model/Piece.java)
-
-מייצג כלי שחמט בודד. מכיל שני `enum` פנימיים:
-
-- **`Color`**: `WHITE('w')`, `BLACK('b')` — עם המרה דו-כיוונית בין תו לערך (`fromChar`).
-- **`Type`**: `KING('K')`, `QUEEN('Q')`, `ROOK('R')`, `KNIGHT('N')`, `BISHOP('B')`, `PAWN('P')`.
-
-הפונקציה החשובה ביותר כאן היא `Type.isValidMoveShape(deltaRow, deltaCol)` — בודקת האם ה"צורה הגיאומטרית" של תנועה חוקית לסוג הכלי, **בלי** להתחשב בחסימות בדרך או בכלים אחרים על הלוח:
-
-- **מלך**: תא בודד לכל כיוון (`|Δrow| ≤ 1` וגם `|Δcol| ≤ 1`, לא שניהם 0).
-- **צריח**: רק אופקי או רק אנכי (בדיוק אחד מהשניים שונה מ-0).
-- **רץ**: אלכסוני טהור (`|Δrow| == |Δcol|`).
-- **מלכה**: איחוד של צריח ורץ.
-- **פרש**: צורת L (`2×1` או `1×2`).
-- **רגלי**: תמיד מחזיר `true` כאן! הלוגיקה המיוחדת של הרגלי (כיוון, צעד כפול, אכילה אלכסונית) **לא** ממומשת ב-`Piece`, אלא בנפרד ב-`MoveValidator.isValidPawnMove` (ראו בהמשך).
-
-### [`Position.java`](main/java/org/example/model/Position.java)
-
-מחלקה פשוטה שעוטפת `(row, col)`. חשוב: היא **דורסת** (`override`) את `equals()` ו-`hashCode()` כך שאפשר להשוות שתי עמדות לפי ערך (ולא לפי זהות אובייקט), ולהשתמש בהן כמפתחות ב-collections. זה קריטי כי בכל הקוד עושים הרבה `position.equals(otherPosition)`.
-
-### [`Board.java`](main/java/org/example/model/Board.java)
-
-עוטף מטריצה דו-ממדית `Piece[][] grid` בגודל `height × width` (מוסק דינמית מהקלט). פונקציות עיקריות:
-
-- `setPiece` / `getPiece` — קריאה/כתיבה לתא בודד (עם בדיקת תחום גבולות).
-- `isWithinBounds` — מוודא שקואורדינטה בתוך הלוח (מונע `ArrayIndexOutOfBounds`).
-- `movePiece(from, to)` — מזיז כלי בפועל: שם אותו ביעד, ומנקה (`null`) את המקור.
-- `print()` — מדפיס כל שורה כטוקנים מופרדים ברווח בודד; תא ריק מודפס כ-`.`, כלי מודפס כ-`"wK"`-סטייל (`color+type`).
-- הקבוע `CELL_SIZE = 100` — משמש להמרת פיקסלים לתאי לוח בכל הקוד שמטפל בקליקים.
-
----
-
-## פענוח הלוח - BoardParser
-
-[`BoardParser.java`](main/java/org/example/adapters/BoardParser.java) הופך את שורות הטקסט הגולמיות ל-`Board` תקין:
-
-1. אם רשימת השורות ריקה → `ERROR ROW_WIDTH_MISMATCH`.
-2. הרוחב (`width`) נקבע לפי מספר הטוקנים בשורה **הראשונה**.
-3. עבור כל שורה: מפצלים לפי רווחים (`split("\\s+")`), ומוודאים שאורכה זהה לרוחב שנקבע. אם לא — אותה שגיאה.
-4. עבור כל טוקן:
-   - `"."` → משבצת ריקה (נשארת `null`).
-   - טוקן שאינו באורך 2 תווים → `ERROR UNKNOWN_TOKEN`.
-   - תו ראשון = צבע (`w`/`b`), תו שני = סוג (`K/Q/R/N/B/P`). אם אחד מהם לא מזוהה → `ERROR UNKNOWN_TOKEN`.
-5. אם הכל תקין, נבנה `Piece` ומוצב בלוח בעמדה המתאימה.
-
-הפרסר **לא בודק** חוקיות שחמטית של המצב ההתחלתי (כמו מספר מלכים, מיקום חוקי) — רק פורמט טקסטואלי תקין.
-
----
-
-## מנוע הזמן - MovementEngine
-
-זהו **הלב הפועם** של הפרויקט — האחראי על התכונה הכי ייחודית של המשחק: תנועה על ציר זמן, במקום תורות.
-
-### [`ActiveMove.java`](main/java/org/example/engine/ActiveMove.java)
-
-מייצג מהלך שעדיין "באוויר" (טרם הושלם בפועל על הלוח). שדות:
-
-| שדה | תיאור |
-|---|---|
-| `from` | עמדת המוצא |
-| `to` | עמדת היעד |
-| `piece` | הכלי שנע |
-| `arrivalTimeMillis` | הזמן (לפי שעון המשחק הגלובלי) שבו המהלך יסתיים |
-| `isJump` | האם זו "קפיצה" מיוחדת (ולא מהלך רגיל) |
-
-`isComplete(currentTime)` פשוט בודק `currentTime >= arrivalTimeMillis`.
-
-### [`MovementEngine.java`](main/java/org/example/engine/MovementEngine.java)
-
-מנהל שעון גלובלי (`gameTimeMillis`) ורשימה (`List<ActiveMove> activeMoves`) של כל המהלכים שנמצאים כרגע "בדרך". שני קבועי זמן:
-
-- `MOVE_DURATION_PER_SQUARE = 1000` מ"ש — **כל משבצת מרחק לוקחת שנייה שלמה**. מהלך צריח על 3 משבצות ייקח 3000 מ"ש.
-- `JUMP_DURATION = 1000` מ"ש — קפיצה תמיד לוקחת שנייה, בלי קשר למרחק (בפועל קפיצה מוגדרת כ-`from == to`, כלומר "עמידה במקום").
-
-#### פונקציות שאילתה (query)
-
-אלו בודקות מצב "תפוס" **לוגית**, בהתחשב במהלכים שעדיין באוויר — לא רק לפי מצב הלוח הפיזי הנוכחי (כי הלוח לא מתעדכן עד שהמהלך מסתיים בפועל!):
-
-- `isPieceMovingFrom(pos)` — האם יש מהלך פעיל שיוצא מהעמדה הזו (כלומר הכלי כבר "בדרך" ולא ניתן לבחור אותו שוב).
-- `isPieceMovingTo(pos)` — האם מהלך **רגיל** (לא קפיצה) מכוון לעמדה הזו.
-- `isColorMoving(color)` — האם יש מהלך רגיל פעיל כלשהו לצבע נתון (משמש כדי למנוע מהיריב לזוז בזמן שהצד השני "באוויר" לאותה עמדה, ראו `InteractionHandler`).
-- `isSquareOccupiedByActiveMove(pos, color)` — האם משבצת "שמורה" ליעד של מהלך פעיל **מאותו צבע** (מונע התנגשות של שני כלים מאותו צד באותו יעד).
-
-#### `addMove(move)`
-
-מוסיף מהלך חדש לרשימה, ומיד לאחר מכן קורא ל-`triggerAirCaptures()`.
-
-#### `triggerAirCaptures()`
-
-בודק אם קיימת **קפיצה פעילה** (`isJump == true`) שמתנגשת עם מהלך יריב שיצא **באותו רגע זמן בדיוק** לאותו יעד. אם כן — הכלי היריב "נתפס באוויר" ומוסר מהרשימה (מבלי שהמהלך שלו יתבצע בפועל). ההשוואה נעשית לפי זמני **התחלה** (לא סיום) של שני המהלכים:
-
-```java
-jumpStartTime == enemyStartTime
-```
-
-זהו מנגנון "הגנה בקפיצה בו-זמנית" — אם שני הצדדים "יצאו" לאותה משבצת בדיוק באותו רגע, מי שקופץ (מגן) תופס את מי שזז לשם (תוקף).
-
-#### `advanceTime(millis)`
-
-מתודה שמקדמת את שעון המשחק. תהליך:
-
-1. מוסיפים `millis` ל-`gameTimeMillis`.
-2. עוברים על כל המהלכים הפעילים; אלו שהושלמו (`isComplete`) מוסרים מהרשימה ומחולקים לשתי רשימות: `completedMoves` (רגילים) ו-`completedJumps` (קפיצות).
-3. עבור כל מהלך רגיל שהושלם: בודקים אם קפיצה שהושלמה **באותו יעד ומצבע יריב** "תפסה אותו באוויר" — אם כן, המהלך **מבוטל** (לא מתבצע כלל, הכלי נחשב "נתפס").
-4. אחרת, המהלך מתבצע בפועל: `board.movePiece(from, to)`. אם הכלי שנאכל היה **מלך**, המשחק מסתיים (`isGameOver = true`).
-5. לבסוף נבדקת הכתרת רגלי (`handlePawnPromotion`).
-
-#### `handlePawnPromotion(move)`
-
-אם הכלי שזז הוא רגלי, ושורת היעד היא השורה האחרונה עבור הצבע שלו (שורה 0 ללבן, השורה התחתונה לשחור), הרגלי **מוחלף** אוטומטית במלכה מאותו צבע.
-
----
-
-## חוקיות מהלכים - MoveValidator
-
-[`MoveValidator.java`](main/java/org/example/rules/MoveValidationService.java) קובע האם מהלך מסוים חוקי — בשילוב עם מצב הלוח הפיזי **וגם** המהלכים הפעילים כרגע (כי גם כלי "בדרך" צריך לחסום נתיב, למשל).
-
-### `calculateDistance(from, to)`
-
-מרחק צ'בישב (Chebyshev distance) — המקסימום בין `|Δrow|` ל-`|Δcol|`. משמש לחישוב משך הזמן שהמהלך ייקח (`distance × 1000` מ"ש).
-
-### `isPathClearWithActiveMoves(from, to, color)`
-
-הולך צעד-אחר-צעד מהמוצא ליעד (לא כולל שתי הקצוות), ובודק שבכל תא בדרך:
-- אין כלי קיים על הלוח.
-- אין כלי מאותו צבע ש**"בדרך" לשם** (`isSquareOccupiedByActiveMove`).
-
-זה מונע "חצייה" דרך כלי חבר שנמצא כרגע במעבר.
-
-### `isValidMove(from, to, piece)`
-
-הפונקציה הראשית:
-
-1. אם `from == to` → לא חוקי.
-2. אם הכלי רגלי → מנותב ל-`isValidPawnMove` (הרגלי שונה מכל שאר הכלים).
-3. אחרת: בודקים את צורת התנועה (`piece.getType().isValidMoveShape`).
-4. אם יש כלי ביעד מאותו צבע → לא חוקי.
-5. אם היעד "שמור" ע"י מהלך פעיל אחר מאותו צבע → לא חוקי.
-6. אם הכלי **אינו** פרש — נבדק שהנתיב פנוי (`isPathClearWithActiveMoves`). פרש קופץ מעל הכל, ולכן פטור מבדיקה זו.
-
-### `isValidPawnMove(from, to, pawn)` — לוגיקת הרגלי המיוחדת
-
-- **כיוון**: `-1` (למעלה, בשורות יורדות) ללבן, `1` (למטה) לשחור.
-- **שורת התחלה**: `height - 2` ללבן (שורה שנייה מלמטה), `1` לשחור (שורה שנייה מלמעלה) — משמש כדי לאפשר צעד כפול.
-- **תנועה ישרה (`Δcol == 0`)**:
-  - היעד חייב להיות ריק (גם פיזית וגם לוגית, ללא מהלך פעיל שכבר מכוון לשם).
-  - צעד בודד בכיוון הנכון → חוקי.
-  - צעד כפול (`2×direction`), רק אם המוצא הוא שורת ההתחלה, **וגם** התא האמצעי פנוי (פיזית ולוגית).
-- **אכילה אלכסונית (`|Δcol| == 1`)**: חוקית רק אם ביעד יש כלי **יריב** (לא ריק, לא מאותו צבע). רגלי לא יכול "לזוז" באלכסון בלי לאכול.
-
----
-
-## טיפול באינטראקציה - InteractionHandler
-
-[`InteractionHandler.java`](main/java/org/example/controller/InteractionHandler.java) הוא מכונת המצבים שמתרגמת קליקי עכבר (בפיקסלים) למהלכים בפועל. שדה יחיד לשמירת מצב: `selectedPosition` (הכלי שנבחר, אם בכלל).
-
-### `handleClick(x, y)`
-
-1. אם המשחק כבר נגמר (`isGameOver`) — מתעלם.
-2. ממיר פיקסלים לתא לוח (`row = y/100`, `col = x/100`), בודק תחום.
-3. **אם אין כלי נבחר** (`selectedPosition == null`):
-   - אם לחצו על כלי (לא תא ריק) שאינו כרגע "בתנועה" (`!isPieceMovingFrom`) — הוא נבחר.
-4. **אם כבר יש כלי נבחר**:
-   - אם לחצו על כלי **אחר מאותו צבע** (ושאינו בתנועה) — הבחירה **מוחלפת** לכלי החדש.
-   - אחרת (תא ריק, או כלי יריב) — ניסיון ביצוע מהלך:
-     - נבדק שהצבע היריב **לא** נמצא כרגע ב"תנועה" (`!isColorMoving`) — מגבלה שמונעת ליצור מהלך חדש בזמן שהיריב "באוויר" (רלוונטי למנגנון תפיסה).
-     - נבדק שהיעד לא כבר "שמור" ע"י מהלך פעיל אחר.
-     - נבדק ש-`MoveValidator.isValidMove` מאשר.
-     - אם הכל תקין: מחושב המרחק וזמן ההגעה (`gameTime + distance × 1000`), ונוצר `ActiveMove` חדש (`isJump = false`) שמתווסף למנוע.
-   - בכל מקרה, לאחר ניסיון המהלך, הבחירה מתאפסת (`selectedPosition = null`).
-
-### `handleJump(x, y)`
-
-מנגנון "הגנה בקפיצה" — הכלי "קופץ במקום" כדי לתפוס מהלך יריב שנכנס אליו:
-
-1. ממיר פיקסלים לתא, בודק תחום, בודק שיש כלי בעמדה ושהוא לא כבר בתנועה.
-2. מחפש מהלך יריב פעיל (`ActiveMove`) שמכוון **לעמדה הזו** (`move.getTo().equals(pos)`), מצבע שונה מהכלי שקפץ, **ושכבר יצא לדרך** (`gameTimeMillis > moveStartTime`, כלומר הוא לא מהלך שהוגדר אך עוד לא התחיל — למעשה זמן ה"התחלה" מחושב אחורה מזמן ההגעה פחות משך הנסיעה).
-3. **אם נמצא מהלך מאיים**: הוא מתבצע **מיידית** בפועל (`board.movePiece`), נבדקת שח-מט (אם הכלי שנאכל הוא מלך), מטופלת הכתרת רגלי אם רלוונטי, והמהלך מוסר מרשימת הפעילים. שימו לב: זה בעצם אומר שהקפיצה "נכשלה" מבחינת הגנה — מהלך היריב שכבר היה בדרך פשוט מתממש כרגיל ומיידי (הקפיצה לא מנעה אותו כי הוא כבר יצא לדרך לפני שהוגנת).
-4. **אם אין מהלך מאיים כזה**: נוצרת קפיצה "רגילה" — `ActiveMove` עם `from == to` (עמידה במקום) ו-`isJump = true`, שתסתיים בעוד `JUMP_DURATION` (1000 מ"ש). קפיצה זו היא שתתפוס תוקף עתידי דרך `triggerAirCaptures`, אם יריב יגדיר מהלך חדש לאותה משבצת **באותו רגע זמן בדיוק** שבו הוגדרה הקפיצה.
-
----
-
-## הבקר הראשי - GameController
-
-[`GameController.java`](main/java/org/example/controller/GameController.java) הוא חזית (Facade) דקה בלבד. הוא בונה ומחזיק את שלושת המנועים (`MovementEngine`, `MoveValidator`, `InteractionHandler`) ומאציל אליהם כל קריאה:
-
-```java
-handleClick(x, y)      → interactionHandler.handleClick(x, y)
-handleJump(x, y)       → interactionHandler.handleJump(x, y)
-advanceTime(millis)    → movementEngine.advanceTime(millis)
-printBoard()           → board.print()
-```
-
-אין כאן שום לוגיקת משחק עצמאית — התפקיד היחיד הוא לחבר בין הרכיבים ולחשוף ממשק נקי ל-`Main`.
-
----
-
-## דוגמאות זרימה מלאות
-
-### דוגמה 1 — מהלך רגיל
+Example:
 
 ```
-click 0 600      → row=6, col=0   (בחירת רגלי לבן, בהנחה שהוא שם)
-click 0 400      → row=4, col=0   (יעד: 2 משבצות למעלה)
-wait 1000
+Board:
+wK . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . .
+. . . . . . . bK
+Commands:
+click 50 50
+click 150 50
 wait 1000
 print board
 ```
 
-1. `click 0 600` — נבחר הכלי בעמדה (6,0).
-2. `click 0 400` — יעד (4,0), מרחק = 2 → `MoveValidator` מאשר (רגלי, צעד כפול משורת התחלה, נתיב פנוי) → נוצר `ActiveMove` עם `arrivalTime = 0 + 2×1000 = 2000`.
-3. `wait 1000` — הזמן מתקדם ל-1000. `isComplete(1000)` → `1000 >= 2000` → `false`. המהלך עדיין באוויר; הלוח עדיין מציג את הרגלי בעמדה הישנה.
-4. `wait 1000` נוסף — הזמן מתקדם ל-2000. כעת `isComplete` מחזיר `true`, המהלך מתבצע בפועל: `board.movePiece` מזיז את הרגלי, והוא מוסר מרשימת הפעילים.
-5. `print board` — כעת יוצג הרגלי בעמדתו החדשה.
+---
 
-**המסקנה החשובה**: בין הקליק לבין ה-`wait` שמשלים את הזמן, הכלי נחשב "בדרך" — תפוס לוגית (אי אפשר לבחור אותו שוב, אי אפשר לחסום עליו) אבל **עדיין מוצג במקומו הישן** על הלוח בפועל.
+## Building & running
 
-### דוגמה 2 — תפיסה באוויר (Air Capture) דרך קפיצה
+The project has no build tool (no Maven/Gradle) — it's compiled directly against the sources under `main/java`, with `JUnit`/`Hamcrest` (under `lib/`) needed only for the test suite under `test/java`.
 
-תרחיש: כלי לבן זז לעבר משבצת מסוימת. אם היריב "קופץ" (`jump`) על אותה משבצת **בדיוק באותו רגע** שהמהלך הלבן הוגדר (כלומר `jumpStartTime == enemyStartTime`), הקפיצה השחורה "תופסת" את המהלך הלבן באוויר — הכלי הלבן לעולם לא יגיע ליעד, ומוסר מרשימת המהלכים הפעילים ברגע ש-`triggerAirCaptures` מזהה את ההתאמה (בין אם דרך `addMove` המיידי, ובין אם דרך `advanceTime` כשהם משלימים באותו הזמן).
+```bash
+# compile
+javac -d out $(find main/java -name '*.java')
 
-### דוגמה 3 — הגנה בקפיצה על מהלך שכבר יצא לדרך
+# run
+java -cp out org.example.Main < input.txt
 
-אם כלי יריב **כבר** בתנועה לעבר משבצת מסוימת (כלומר `gameTimeMillis > moveStartTime` שלו), וקוראים `jump` על אותה משבצת — הקפיצה "מגלה" את המהלך המאיים ומבצעת אותו **מיידית** (במקום לתפוס אותו). זהו למעשה מנגנון בו הקפיצה מוגדרת ל"נכשל" נגד מהלך שכבר יצא — רק קפיצה שמוגדרת **מראש** (לפני שהמהלך היריב יצא, ובאותו רגע בדיוק) יכולה לתפוס אותו.
+# compile & run tests
+javac -d out -cp "lib/junit-4.13.1.jar:lib/hamcrest-core-1.3.jar:out" $(find test/java -name '*.java')
+java -cp "lib/junit-4.13.1.jar:lib/hamcrest-core-1.3.jar:out" org.junit.runner.JUnitCore org.example.Iteration1_BoardParsingTest
+```
+
+### Testing note: `TestGameControllerFactory`
+
+`GameController` uses **pure constructor injection** — it never instantiates its own collaborators, so every test that needs a fully wired game has to build the object graph by hand: a `MovementEngine`, a `MoveValidationService` bound to it, an `InteractionHandler` bound to both, and finally the `GameController` itself.
+
+To avoid repeating that wiring at every test call site, `test/java/org/example/TestGameControllerFactory.java` provides a single static factory method:
+
+```java
+GameController gc = TestGameControllerFactory.create(board);
+```
+
+This is a test-only helper — it performs exactly the same manual wiring the composition root (`Main.java`) performs in production, just packaged for reuse across the test suite. Production code never calls it.
 
 ---
 
-## נקודות עדינות וגבוליות שכדאי להכיר
+## License
 
-- **פרש פטור מבדיקת נתיב** — היחיד שקופץ מעל כלים אחרים (`MoveValidator.isValidMove`).
-- **`Piece.Type.isValidMoveShape` לרגלי תמיד `true`** — כל הלוגיקה האמיתית של הרגלי נמצאת אך ורק ב-`MoveValidator.isValidPawnMove`, לא ב-`Piece`.
-- **בדיקות "תפוס ע"י מהלך פעיל" בודקות רק אותו צבע** — `isSquareOccupiedByActiveMove(pos, color)` מתעניינת רק אם כלי **מאותו צבע** כבר מכוון לשם. שני כלים מצבעים שונים יכולים "לרדוף" לאותה משבצת בו-זמנית (וזה בדיוק המנגנון שמאפשר תפיסה - "מרוץ" למשבצת).
-- **`isColorMoving` בודק את הצבע כולו, לא כלי בודד** — כשמנסים ליצור מהלך חדש, נבדק אם **כל** הצבע היריב נמצא בתנועה (לא רק הכלי שביעד), מה שמונע התחלת מהלך חדש בזמן שהיריב "באוויר" (משמש להגנה מפני ניצול תזמון).
-- **קפיצה מוגדרת כ-`from == to`** — מבחינה מבנית זו לא "תנועה" אמיתית אלא סימון "עמידה על המשמר" למשך שנייה.
-- **זמני "התחלה" של מהלך מחושבים לאחור** — אין שדה `startTime` מפורש ב-`ActiveMove`; בכל מקום שצריך אותו הוא מחושב כ-`arrivalTimeMillis - (distance × MOVE_DURATION_PER_SQUARE)`.
-- **שח-מט נ
+No license file is currently included in this repository.
