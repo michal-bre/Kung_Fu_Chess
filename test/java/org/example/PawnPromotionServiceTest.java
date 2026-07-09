@@ -14,11 +14,11 @@ import static org.junit.Assert.*;
  * no board parsing. This is exactly the kind of test the rules layer is
  * designed to make trivial.
  *
- * Note: this service is currently NOT wired into the automatic move-resolution
- * flow (see MovementEngine's class doc for why blanket edge-row promotion was
- * removed - the grader's reference behavior does not auto-promote on these
- * minimal test boards). It remains available and fully tested here for any
- * caller that wants to apply promotion explicitly.
+ * Note: MovementEngine wires this service in at the exact point a move
+ * resolves (resolveSimultaneousArrivals) - see its class doc. This file
+ * tests the promotion predicate itself in isolation; Iteration10_
+ * PawnMovementAndPromotionTest exercises the end-to-end wiring through the
+ * engine.
  */
 public class PawnPromotionServiceTest {
 

@@ -5,6 +5,7 @@ import org.example.model.Piece;
 import org.example.model.Position;
 import org.example.rules.ActiveMoveQuery;
 import org.example.rules.AirCaptureService;
+import org.example.rules.PawnPromotionService;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -18,20 +19,21 @@ import java.util.Map;
  * currently in flight, and orchestrates the state changes that result
  * (applying moves to the board, triggering captures). Depends on model
  * (Board) directly - Board is a pure entity, so no port is needed for it -
- * and on the rules layer's AirCaptureService and its own
- * EnginePort/ActiveMoveQuery ports.
+ * and on the rules layer's AirCaptureService, PawnPromotionService, and its
+ * own EnginePort/ActiveMoveQuery ports.
  *
- * Note: automatic pawn promotion is intentionally NOT wired in here. The
- * grader's own reference behavior treats a pawn landing on the board's edge
- * row as still a pawn in every observed case except a dedicated,
- * purpose-built promotion scenario - i.e. reaching the edge row is not, by
- * itself, sufficient to promote on these minimal test boards.
- * org.example.rules.PawnPromotionService still exists and is independently
- * unit-testable; it is simply not invoked automatically by this engine.
+ * Promotion fires exactly once, at the moment a move resolves: whichever
+ * piece wins a contested destination square in resolveSimultaneousArrivals is
+ * checked immediately after being placed on the board. A pawn is only ever
+ * promoted because it just arrived on its color's edge row via a completed
+ * move - a pawn that is simply sitting on the edge row (e.g. placed there by
+ * the initial board setup and never moved) must stay a pawn, so promotion is
+ * deliberately NOT re-checked on every tick or for the whole board.
  */
 public class MovementEngine implements EnginePort, ActiveMoveQuery {
     private final Board board;
     private final AirCaptureService airCaptureService;
+    private final PawnPromotionService pawnPromotionService;
     private final List<ActiveMove> activeMoves;
     private final List<ActiveMove> recentlyCompletedMoves;
     private long gameTimeMillis;
@@ -42,6 +44,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     public MovementEngine(Board board) {
         this.board = board;
         this.airCaptureService = new AirCaptureService();
+        this.pawnPromotionService = new PawnPromotionService(board);
         this.activeMoves = new ArrayList<>();
         this.recentlyCompletedMoves = new ArrayList<>();
         this.gameTimeMillis = 0;
@@ -293,6 +296,11 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
 
             board.setPiece(destination.getRow(), destination.getCol(), winner.getPiece());
             recentlyCompletedMoves.add(winner);
+
+            // Only the piece that just arrived is eligible - never a blanket
+            // board scan, which would also promote a pawn that merely started
+            // a scenario sitting on the edge row without ever moving there.
+            pawnPromotionService.handlePawnPromotion(winner.getPiece(), destination);
         }
     }
 

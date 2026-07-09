@@ -20,10 +20,12 @@ import static org.junit.Assert.*;
  *    board's edge row, not one row in from it; see MoveValidationService).
  * 2. The path must be clear (blocked by piece)
  * 3. The path must be clear (blocked by friendly active reservation)
- * 4. A pawn reaching the last row does NOT auto-promote (that automatic
- *    behavior was removed - see MovementEngine's class doc and
- *    PawnPromotionServiceTest for the still-available, explicitly-invoked
- *    promotion logic)
+ * 4. A pawn reaching the last row via a completed move auto-promotes to a
+ *    queen (see MovementEngine.resolveSimultaneousArrivals, which checks
+ *    promotion right when a piece is placed on the board - never as a
+ *    periodic board-wide scan, so a pawn merely sitting on the edge row
+ *    without having just moved there stays a pawn; see
+ *    PawnPromotionServiceTest for the underlying promotion logic)
  */
 public class Iteration10_PawnMovementAndPromotionTest {
 
@@ -111,11 +113,9 @@ public class Iteration10_PawnMovementAndPromotionTest {
     }
 
     @Test
-    public void testPawnDoesNotAutoPromoteOnLastRow() {
-        // A pawn reaching the last row simply arrives there and stays a pawn.
-        // Automatic promotion was removed because it fired incorrectly on small
-        // boards that reach the edge row without the pawn having actually
-        // crossed a full board (see MovementEngine's class doc).
+    public void testPawnAutoPromotesOnLastRow() {
+        // A pawn that completes a move landing on the last row auto-promotes
+        // to a queen (see MovementEngine.resolveSimultaneousArrivals).
         board.setPiece(0, 0, null); // clear any existing piece (e.g., initial white king)
         board.setPiece(1, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
 
@@ -128,7 +128,7 @@ public class Iteration10_PawnMovementAndPromotionTest {
 
         Piece arrived = board.getPiece(new Position(0, 0));
         assertNotNull("Pawn should arrive at the last row", arrived);
-        assertEquals("Pawn must NOT auto-promote", Piece.Type.PAWN, arrived.getType());
+        assertEquals("Pawn must auto-promote to a queen", Piece.Type.QUEEN, arrived.getType());
         assertEquals("Color should remain WHITE", Piece.Color.WHITE, arrived.getColor());
     }
 }
