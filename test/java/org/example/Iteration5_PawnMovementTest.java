@@ -26,10 +26,10 @@ import static org.junit.Assert.*;
  * 7. Pawns capture diagonally only
  * 8. Pawns cannot move diagonally forward without enemy
  *
- * Note on "starting position": the pawn's starting row is the literal edge
- * of the board - row (height-1) for white, row 0 for black - not one row in
- * from the edge. On this 8-row board that's row 7 for white and row 0 for
- * black.
+ * Note on "starting position": the pawn's starting row is one row in from
+ * its own back edge - row (height-2) for white, row 1 for black - never the
+ * literal edge row itself (that's the opposing side's promotion square). On
+ * this 8-row board that's row 6 for white and row 1 for black.
  */
 public class Iteration5_PawnMovementTest {
 
@@ -72,19 +72,19 @@ public class Iteration5_PawnMovementTest {
 
     @Test
     public void testWhitePawnMovesFromStartingPosition() {
-        // White pawn starts at row 7 (the board edge), can move to row 6 or 5 (2 squares)
-        board.setPiece(7, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
-        boolean valid = moveValidator.isValidMove(new Position(7, 0), new Position(5, 0),
-                                                   board.getPiece(new Position(7, 0)));
+        // White pawn starts at row 6 (one row in from the edge), can move to row 5 or 4 (2 squares)
+        board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+        boolean valid = moveValidator.isValidMove(new Position(6, 0), new Position(4, 0),
+                                                   board.getPiece(new Position(6, 0)));
         assertTrue("White pawn should move 2 squares from starting position", valid);
     }
 
     @Test
     public void testBlackPawnMovesFromStartingPosition() {
-        // Black pawn starts at row 0 (the board edge), can move to row 1 or 2 (2 squares)
-        board.setPiece(0, 0, new Piece(Piece.Color.BLACK, Piece.Type.PAWN));
-        boolean valid = moveValidator.isValidMove(new Position(0, 0), new Position(2, 0),
-                                                   board.getPiece(new Position(0, 0)));
+        // Black pawn starts at row 1 (one row in from the edge), can move to row 2 or 3 (2 squares)
+        board.setPiece(1, 0, new Piece(Piece.Color.BLACK, Piece.Type.PAWN));
+        boolean valid = moveValidator.isValidMove(new Position(1, 0), new Position(3, 0),
+                                                   board.getPiece(new Position(1, 0)));
         assertTrue("Black pawn should move 2 squares from starting position", valid);
     }
 
@@ -94,7 +94,7 @@ public class Iteration5_PawnMovementTest {
         board.setPiece(5, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
         boolean valid = moveValidator.isValidMove(new Position(5, 0), new Position(3, 0),
                                                    board.getPiece(new Position(5, 0)));
-        assertFalse("White pawn can only move 2 squares from row 7", valid);
+        assertFalse("White pawn can only move 2 squares from row 6", valid);
     }
 
     @Test
@@ -103,7 +103,7 @@ public class Iteration5_PawnMovementTest {
         board.setPiece(2, 0, new Piece(Piece.Color.BLACK, Piece.Type.PAWN));
         boolean valid = moveValidator.isValidMove(new Position(2, 0), new Position(4, 0),
                                                    board.getPiece(new Position(2, 0)));
-        assertFalse("Black pawn can only move 2 squares from row 0", valid);
+        assertFalse("Black pawn can only move 2 squares from row 1", valid);
     }
 
     @Test
@@ -118,11 +118,11 @@ public class Iteration5_PawnMovementTest {
 
     @Test
     public void testPawnBlockedByMiddleSquareWhenMovingTwoSquares() {
-        board.setPiece(7, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
-        board.setPiece(6, 0, new Piece(Piece.Color.BLACK, Piece.Type.PAWN));
+        board.setPiece(6, 0, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+        board.setPiece(5, 0, new Piece(Piece.Color.BLACK, Piece.Type.PAWN));
 
-        boolean valid = moveValidator.isValidMove(new Position(7, 0), new Position(5, 0),
-                                                   board.getPiece(new Position(7, 0)));
+        boolean valid = moveValidator.isValidMove(new Position(6, 0), new Position(4, 0),
+                                                   board.getPiece(new Position(6, 0)));
         assertFalse("Pawn 2-square move blocked by middle piece", valid);
     }
 
@@ -195,12 +195,12 @@ public class Iteration5_PawnMovementTest {
 
     @Test
     public void testPawnMultipleStartingSquares() {
-        // Test all 8 white starting positions (row 7, the board edge)
+        // Test all 8 white starting positions (row 6, one row in from the edge)
         for (int col = 0; col < 8; col++) {
-            board.setPiece(7, col, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
-            boolean valid = moveValidator.isValidMove(new Position(7, col), new Position(5, col),
-                                                       board.getPiece(new Position(7, col)));
-            assertTrue("All white pawns should move 2 from row 7", valid);
+            board.setPiece(6, col, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+            boolean valid = moveValidator.isValidMove(new Position(6, col), new Position(4, col),
+                                                       board.getPiece(new Position(6, col)));
+            assertTrue("All white pawns should move 2 from row 6", valid);
         }
     }
 
