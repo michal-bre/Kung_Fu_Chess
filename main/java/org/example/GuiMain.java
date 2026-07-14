@@ -1,8 +1,14 @@
 package org.example;
 
 import org.example.adapters.BoardParser;
+import org.example.controller.GameController;
+import org.example.controller.InteractionHandler;
+import org.example.engine.MovementEngine;
 import org.example.model.Board;
+import org.example.rules.MoveValidationService;
+import org.example.view.BoardInputListener;
 import org.example.view.BoardView;
+import org.example.view.GameLoop;
 import org.example.view.GameWindow;
 
 import java.util.Arrays;
@@ -18,8 +24,12 @@ import java.util.List;
  * the engine/rules/controller/adapters layers references org.example.view
  * or this class.
  *
- * Phase 1: wire the board model to the view and display the chessboard.
- * Piece rendering and mouse-driven interaction land in later phases.
+ * Phase 1 drew the empty board; Phase 2 put the pieces on it. This phase
+ * makes it interactive: mouse input is routed to the same
+ * engine/rules/controller stack the CLI drives (identical wiring to
+ * Main.java / TestGameControllerFactory - GuiMain is just a different front
+ * end onto it), and a GameLoop keeps real-time moves advancing and the view
+ * redrawing on its own, since nothing here types WAIT commands.
  */
 public class GuiMain {
 
@@ -37,8 +47,17 @@ public class GuiMain {
 
         Board board = BoardParser.parse(startingPosition);
 
-        BoardView boardView = new BoardView(board);
+        MovementEngine movementEngine = new MovementEngine(board);
+        MoveValidationService moveValidationService = new MoveValidationService(board, movementEngine);
+        InteractionHandler interactionHandler = new InteractionHandler(board, movementEngine, moveValidationService);
+        GameController gameController = new GameController(movementEngine, interactionHandler);
+
+        BoardView boardView = new BoardView(board, movementEngine);
+        boardView.addMouseListener(new BoardInputListener(gameController, boardView::repaint));
+
         GameWindow window = new GameWindow("Kung Fu Chess", boardView);
         window.show();
+
+        new GameLoop(gameController, boardView::repaint).start();
     }
 }
