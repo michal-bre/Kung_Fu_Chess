@@ -4,6 +4,7 @@ import org.example.model.Piece;
 import org.example.model.Position;
 import org.example.adapters.BoardParser;
 import org.example.controller.GameController;
+import org.example.engine.EnginePort;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -17,7 +18,9 @@ import static org.junit.Assert.*;
  *
  * Test that:
  * 1. Piece cannot be redirected while already moving
- * 2. After piece arrives, it can move again immediately
+ * 2. After a piece arrives, it must rest (EnginePort.REST_AFTER_MOVE_MS)
+ *    before it can move again - attempting immediately is silently rejected,
+ *    and moving again succeeds only once that rest period has elapsed
  * 3. Clicking on moving piece is ignored
  * 4. Clicking on occupied destination square during movement is ignored
  */
@@ -95,7 +98,7 @@ public class Iteration7_BlockedRedirectsTest {
     }
 
     @Test
-    public void testCanMoveAgainImmediatelyAfterArrival() {
+    public void testCanMoveAgainOnceRestElapsesAfterArrival() {
         // First move: (0, 0) to (0, 1)
         gameController.handleClick(50, 50);        // Select king
         gameController.handleClick(100, 50);       // Move 1 square
@@ -105,7 +108,11 @@ public class Iteration7_BlockedRedirectsTest {
         // King should now be at (0, 1)
         assertNotNull(board.getPiece(new Position(0, 1)));
 
-        // Second move immediately: (0, 1) to (0, 2)
+        // A piece cannot start a new move again until its rest period
+        // elapses (move -> long_rest -> idle).
+        gameController.advanceTime(EnginePort.REST_AFTER_MOVE_MS);
+
+        // Second move once rested: (0, 1) to (0, 2)
         gameController.handleClick(100, 50);       // Select king again
         gameController.handleClick(250, 50);       // Move 1 square
 
@@ -117,13 +124,24 @@ public class Iteration7_BlockedRedirectsTest {
     }
 
     @Test
-    public void testNoCooldownAfterMove() {
+    public void testCooldownBlocksImmediateReselectThenAllowsAfterRest() {
         // Move 1: short distance
         gameController.handleClick(50, 50);        // Select
         gameController.handleClick(100, 50);       // 1 square
         gameController.advanceTime(1000);
 
-        // Move 2: immediately without any delay
+        // Move 2 attempted immediately, with no delay: the king is still
+        // resting, so it cannot be reselected and this whole attempt is a
+        // silent no-op.
+        gameController.handleClick(100, 50);       // Select at new position - rejected, still resting
+        gameController.handleClick(250, 50);       // No piece was selected, so this is also a no-op
+        gameController.advanceTime(1);
+
+        assertNotNull("King should still be at its first destination", board.getPiece(new Position(0, 1)));
+        assertNull("King must not have moved a second time while still resting", board.getPiece(new Position(0, 2)));
+
+        // Once the rest period elapses, the same move succeeds.
+        gameController.advanceTime(EnginePort.REST_AFTER_MOVE_MS);
         gameController.handleClick(100, 50);       // Select at new position
         gameController.handleClick(250, 50);       // 1 square
         gameController.advanceTime(1000);
@@ -151,12 +169,14 @@ public class Iteration7_BlockedRedirectsTest {
     }
 
     @Test
-    public void testSequentialMovesWithoutDelay() {
-        // Rapid sequence of moves without long waits between
+    public void testSequentialMovesEachWaitingOutRest() {
+        // Sequence of moves, each one waiting out the previous move's rest
+        // period before the next is allowed to begin.
         for (int i = 0; i < 3; i++) {
             gameController.handleClick(50 + (i * 100), 50);     // Select
             gameController.handleClick(50 + ((i + 1) * 100), 50); // Move 1 square
             gameController.advanceTime(1000);
+            gameController.advanceTime(EnginePort.REST_AFTER_MOVE_MS);
         }
 
         // After 3 moves, king should be at (0, 3)

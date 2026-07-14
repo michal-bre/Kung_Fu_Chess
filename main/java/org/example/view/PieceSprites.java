@@ -12,54 +12,56 @@ import java.util.Map;
 
 /**
  * View layer: loads and caches one static sprite per (color, type)
- * combination, sourced from the vendored CTD26 "pieces1" art set (the
- * "idle" state's first frame), and prepares each one for compositing onto
- * the checkered board.
+ * combination from assets/pieces/&lt;TypeColor&gt;.png (e.g. KW.png,
+ * PB.png), and prepares each one for compositing onto the checkered board.
  *
- * Asset choice: CTD26 ships two sprite sets. pieces2 has proper transparent
- * (RGBA) PNGs, but its art is incomplete - several piece codes (KB, RW, RB,
- * PB) have no image files at all, in any state, so it cannot cover a full
- * starting position. pieces1 IS complete for all twelve codes, but its
- * renders are opaque (RGB, no alpha) on a flat white background. This class
- * makes pieces1 usable by keying the white background out to transparency
- * itself, using only standard JDK pixel access (BufferedImage.getRGB/
- * setRGB) - no third-party library, consistent with the design brief.
+ * Sprites are expected to normally be well-formed, pre-cut RGBA PNGs (a
+ * real alpha channel already separating the piece from its background) -
+ * that's the common case, and such an image is used completely as-is, with
+ * zero processing. See loadAndClean/hasRealTransparency.
  *
- * Naive global "any near-white pixel becomes transparent" thresholding was
- * deliberately avoided: these renders use a flat highlight tone that is
- * itself very close to white inside the piece silhouette (a specular
- * highlight), so a global threshold would punch stray transparent flecks
- * into the piece body wherever that highlight appears. Instead, only the
- * near-white region that is reachable from the image's outer border by
- * flood fill is keyed out - i.e. the actual background - so enclosed
- * near-white pixels inside the piece are left alone.
+ * The one exception is a specific legacy asset shape this class also still
+ * supports: CTD26's vendored "pieces1" set, whose renders are fully OPAQUE
+ * (no alpha at all) on a flat white background, AND have a debug watermark
+ * (the state name and frame number, e.g. "idle"/"1") stamped in solid blue
+ * with a green outline across the middle of the piece. For an image with no
+ * real transparency, this class assumes it's that shape and cleans it up:
  *
- * Separately, every pieces1 render also has a debug watermark burned into
- * the pixels - the state name and frame number ("idle" / "1") stamped in
- * solid blue with a green outline across the middle of the piece. The rest
- * of the artwork is strictly grayscale (white/black/gray only - every
- * sample is r==g==b), so the watermark is trivially distinguishable by
- * being the only saturated color in the image. It is removed BEFORE the
- * white-background key-out (a multi-source BFS inpaint: watermark pixels
- * are repeatedly replaced with the average of their already-resolved
- * neighbors, growing inward from the edge of the watermark), so that the
- * area it covers is reconstructed back to plain background/body color and
- * the subsequent white-keying step sees a normal image.
+ * 1. Watermark removal: the rest of a pieces1 render is strictly grayscale
+ *    (white/black/gray only - every non-watermark sample has r==g==b), so
+ *    the watermark is trivially distinguishable as the only saturated color
+ *    in the image. Removed via a multi-source BFS inpaint - watermarked
+ *    pixels are repeatedly replaced with the average of their already-
+ *    resolved neighbors, growing inward from the edge of the watermark.
+ * 2. White-background key-out: only the near-white region reachable from
+ *    the image's outer border by flood fill is made transparent - i.e. the
+ *    actual background - not a naive global "any near-white pixel"
+ *    threshold, which would also punch holes in the specular highlight
+ *    tone inside the piece body that happens to sit close to white too.
+ *
+ * Both steps use only standard JDK pixel access (BufferedImage.getRGB/
+ * setRGB) - no third-party library, consistent with the design brief - and
+ * neither ever runs on an image that already has real transparency, since
+ * both would corrupt one (watermark-removal would treat the piece's own
+ * color as "watermark" almost everywhere, and forcing full opacity on every
+ * pixel would erase whatever shape the original alpha channel cut out).
  */
 final class PieceSprites {
 
     private static final String SPRITE_DIR = "assets/pieces/";
 
     // A pixel counts as "background white" if every channel is within this
-    // distance of 255. The renders' body highlight tone (~230,230,230) sits
-    // well outside this band, so it is never mistaken for background.
+    // distance of 255. The legacy renders' body highlight tone
+    // (~230,230,230) sits well outside this band, so it is never mistaken
+    // for background.
     private static final int WHITE_CHANNEL_FLOOR = 245;
 
     // A pixel counts as "watermark" if its channels disagree by more than
-    // this much. Every non-watermark pixel in these renders is perfectly
-    // neutral gray (r==g==b) regardless of how light or dark it is, so even
-    // a small saturation reliably means "this is the blue/green stamp",
-    // with no risk of catching real artwork.
+    // this much. Every non-watermark pixel in the legacy renders is
+    // perfectly neutral gray (r==g==b) regardless of how light or dark it
+    // is, so even a small saturation reliably means "this is the blue/green
+    // stamp", with no risk of catching real artwork - in THOSE renders only;
+    // this whole path is skipped for anything with real transparency.
     private static final int WATERMARK_SATURATION_THRESHOLD = 15;
 
     private final Map<Piece.Color, Map<Piece.Type, BufferedImage>> cache = new EnumMap<>(Piece.Color.class);
@@ -80,8 +82,33 @@ final class PieceSprites {
         File file = AssetPaths.resolve(fileName);
 
         BufferedImage raw = new Img().read(file.getPath()).get();
+
+        if (hasRealTransparency(raw)) {
+            return raw;
+        }
+
         BufferedImage dewatermarked = removeColorWatermark(raw);
         return keyOutBorderConnectedWhite(dewatermarked);
+    }
+
+    /**
+     * True if this image already has at least one non-fully-opaque pixel -
+     * i.e. it's a normal pre-cut sprite that needs no further processing.
+     * A fully opaque image (no alpha channel at all, or an alpha channel
+     * that's 0xFF everywhere) is what triggers the legacy pieces1 cleanup
+     * path instead.
+     */
+    private static boolean hasRealTransparency(BufferedImage image) {
+        if (!image.getColorModel().hasAlpha()) return false;
+
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                if ((image.getRGB(x, y) >>> 24) != 0xFF) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

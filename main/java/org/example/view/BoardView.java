@@ -53,6 +53,10 @@ public class BoardView extends JPanel {
     // window rather than disappearing abruptly.
     private static final long REJECTION_FLASH_DURATION_MS = 400;
 
+    // Cool blue-gray tint drawn under a resting piece, distinct from the
+    // rejection flash's red so the two aren't confused for one another.
+    private static final Color RESTING_TINT = new Color(40, 60, 120, 90);
+
     private final Board board;
     private final EnginePort engine;
     private final GameController gameController;
@@ -67,19 +71,20 @@ public class BoardView extends JPanel {
         int pixelWidth = board.getWidth() * Board.CELL_SIZE;
         int pixelHeight = board.getHeight() * Board.CELL_SIZE;
 
-        // Stretched to exactly fill the logical grid (aspect NOT preserved).
-        // InteractionHandler already derives row/col from raw pixels as
-        // x / Board.CELL_SIZE, y / Board.CELL_SIZE - if the board image were
-        // letterboxed to preserve its own aspect ratio instead, the picture
-        // the player sees would be offset from the square math the engine
-        // uses, and clicks would land on the wrong square once mouse input
-        // is wired up in a later phase.
-        Img loadedBoard = new Img().read(
-                AssetPaths.resolve(BOARD_IMAGE_ASSET).getPath(),
-                new Dimension(pixelWidth, pixelHeight),
-                false,
-                null);
-        this.boardImage = loadedBoard.get();
+        // Loaded at native size (no resize yet) so BoardImageCropper can
+        // find and strip off any decorative border/frame baked into the
+        // asset BEFORE the checkerboard itself gets stretched to fill the
+        // grid - see BoardImageCropper's class doc for why that order
+        // matters. What's left after cropping is stretched to exactly fill
+        // the logical grid (aspect NOT preserved). InteractionHandler
+        // already derives row/col from raw pixels as x / Board.CELL_SIZE,
+        // y / Board.CELL_SIZE - if the board image were letterboxed to
+        // preserve its own aspect ratio instead, the picture the player
+        // sees would be offset from the square math the engine uses, and
+        // clicks would land on the wrong square.
+        BufferedImage rawBoard = new Img().read(AssetPaths.resolve(BOARD_IMAGE_ASSET).getPath()).get();
+        BufferedImage checkerboardOnly = BoardImageCropper.cropToCheckerboard(rawBoard);
+        this.boardImage = scaleTo(checkerboardOnly, pixelWidth, pixelHeight);
 
         setPreferredSize(new Dimension(pixelWidth, pixelHeight));
         setOpaque(true);
@@ -202,8 +207,20 @@ public class BoardView extends JPanel {
                 Piece piece = board.getPiece(pos);
                 if (piece == null) continue;
 
+                int cellX = col * Board.CELL_SIZE;
+                int cellY = row * Board.CELL_SIZE;
+
+                // A piece that just finished a move/jump can't start a new
+                // move until it stops resting (see EnginePort.isPieceResting /
+                // REST_AFTER_MOVE_MS / REST_AFTER_JUMP_MS) - tint its square so
+                // that cooldown is actually visible, not just enforced.
+                if (engine.isPieceResting(pos)) {
+                    g.setColor(RESTING_TINT);
+                    g.fillRect(cellX, cellY, Board.CELL_SIZE, Board.CELL_SIZE);
+                }
+
                 BufferedImage sprite = pieceSprites.get(piece.getColor(), piece.getType());
-                paintSpriteCentered(g, sprite, col * Board.CELL_SIZE, row * Board.CELL_SIZE);
+                paintSpriteCentered(g, sprite, cellX, cellY);
             }
         }
 
@@ -251,6 +268,22 @@ public class BoardView extends JPanel {
         int deltaRow = Math.abs(to.getRow() - from.getRow());
         int deltaCol = Math.abs(to.getCol() - from.getCol());
         return Math.max(deltaRow, deltaCol);
+    }
+
+    /**
+     * Scales an already-loaded image to an exact target size, matching the
+     * bilinear quality Img.read's own resize path uses. Needed here (rather
+     * than just passing a target Dimension straight to Img.read, as before)
+     * because BoardImageCropper has to run on the raw, native-size image
+     * BEFORE any resize happens.
+     */
+    private static BufferedImage scaleTo(BufferedImage src, int width, int height) {
+        BufferedImage dst = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = dst.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.drawImage(src, 0, 0, width, height, null);
+        g.dispose();
+        return dst;
     }
 
     private void paintSpriteCentered(Graphics2D g, BufferedImage sprite, int cellX, int cellY) {

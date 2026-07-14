@@ -8,6 +8,7 @@ import org.example.rules.AirCaptureService;
 import org.example.rules.PawnPromotionService;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,10 +37,12 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     private final PawnPromotionService pawnPromotionService;
     private final List<ActiveMove> activeMoves;
     private final List<ActiveMove> recentlyCompletedMoves;
+    private final Map<Position, Long> restingUntilMillis;
     private long gameTimeMillis;
     private boolean isGameOver;
 
-    // MOVE_DURATION_PER_SQUARE / JUMP_DURATION are inherited from EnginePort.
+    // MOVE_DURATION_PER_SQUARE / JUMP_DURATION / REST_AFTER_MOVE_MS /
+    // REST_AFTER_JUMP_MS are inherited from EnginePort.
 
     public MovementEngine(Board board) {
         this.board = board;
@@ -47,8 +50,24 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
         this.pawnPromotionService = new PawnPromotionService(board);
         this.activeMoves = new ArrayList<>();
         this.recentlyCompletedMoves = new ArrayList<>();
+        this.restingUntilMillis = new HashMap<>();
         this.gameTimeMillis = 0;
         this.isGameOver = false;
+    }
+
+    @Override
+    public boolean isPieceResting(Position pos) {
+        Long until = restingUntilMillis.get(pos);
+        return until != null && gameTimeMillis < until;
+    }
+
+    @Override
+    public void markResting(Position pos, long durationMillis) {
+        // A fresh arrival always overwrites whatever stale entry (if any)
+        // was left by a previous, unrelated occupant of this square - the
+        // square can only ever hold one piece at a time, so there is never a
+        // reason to keep an older timer around once a new one is set here.
+        restingUntilMillis.put(pos, gameTimeMillis + durationMillis);
     }
 
     @Override
@@ -178,6 +197,14 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
         // Remove completed moves from active list
         activeMoves.removeAll(toRemove);
 
+        // A completed jump never relocates its piece (from == to - see
+        // InteractionHandler.handleJump), so unlike a normal move it has no
+        // "arrival at a destination" moment inside resolveSimultaneousArrivals
+        // to hang a rest period off of. Set it here instead: jump -> short_rest.
+        for (ActiveMove completedJump : completedJumps) {
+            markResting(completedJump.getTo(), EnginePort.REST_AFTER_JUMP_MS);
+        }
+
         // Check for air captures with moves still in transit
         for (ActiveMove completedJump : completedJumps) {
             List<ActiveMove> capturedInTransit = new ArrayList<>();
@@ -296,6 +323,11 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
 
             board.setPiece(destination.getRow(), destination.getCol(), winner.getPiece());
             recentlyCompletedMoves.add(winner);
+            // survivingMoves only ever contains normal moves (see advanceTime,
+            // which routes completed jumps down a separate path below) - so a
+            // winner here always just finished a MOVE, never a jump, and
+            // always gets the move -> long_rest duration.
+            markResting(destination, EnginePort.REST_AFTER_MOVE_MS);
 
             // Only the piece that just arrived is eligible - never a blanket
             // board scan, which would also promote a pawn that merely started

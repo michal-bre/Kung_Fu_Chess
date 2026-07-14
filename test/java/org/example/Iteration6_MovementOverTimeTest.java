@@ -4,6 +4,7 @@ import org.example.model.Piece;
 import org.example.model.Position;
 import org.example.adapters.BoardParser;
 import org.example.controller.GameController;
+import org.example.engine.EnginePort;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -172,7 +173,7 @@ public class Iteration6_MovementOverTimeTest {
     }
 
     @Test
-    public void testPieceCanMoveAgainAfterArrival() {
+    public void testPieceCanMoveAgainAfterArrivalAndRest() {
         // First move: king to (0, 1)
         gameController.handleClick(50, 50);
         gameController.handleClick(100, 50);
@@ -180,6 +181,11 @@ public class Iteration6_MovementOverTimeTest {
 
         // Piece should be at (0, 1)
         assertNotNull(board.getPiece(new Position(0, 1)));
+
+        // A piece rests briefly after a move before it's eligible to move
+        // again (move -> long_rest -> idle; see EnginePort.REST_AFTER_MOVE_MS
+        // and Iteration7_BlockedRedirectsTest's dedicated cooldown tests).
+        gameController.advanceTime(EnginePort.REST_AFTER_MOVE_MS);
 
         // Second move: from (0, 1) to (0, 2) - one more diagonal step
         gameController.handleClick(100, 50);    // Select king at (0, 1)

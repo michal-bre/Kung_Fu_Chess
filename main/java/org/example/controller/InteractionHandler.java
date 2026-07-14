@@ -70,9 +70,16 @@ public class InteractionHandler {
         Piece clickedPiece = board.getPiece(clickedPos);
 
         if (selectedPosition == null) {
-            if (clickedPiece != null && !engine.isPieceMovingFrom(clickedPos)) {
+            if (clickedPiece != null && !engine.isPieceMovingFrom(clickedPos) && !engine.isPieceResting(clickedPos)) {
                 selectedPosition = clickedPos;
                 selectedPiece = clickedPiece;
+            } else if (clickedPiece != null) {
+                // A real piece was clicked but couldn't be selected (mid-flight
+                // or still resting after its last action) - flag it the same
+                // way a rejected move attempt is, so the player sees why
+                // nothing happened instead of wondering if the click landed.
+                lastRejectedPosition = clickedPos;
+                lastRejectedAtMillis = engine.getGameTimeMillis();
             }
             return;
         }
@@ -98,9 +105,12 @@ public class InteractionHandler {
         }
 
         if (clickedPiece != null && clickedPiece.getColor() == selectedPiece.getColor()) {
-            if (!engine.isPieceMovingFrom(clickedPos)) {
+            if (!engine.isPieceMovingFrom(clickedPos) && !engine.isPieceResting(clickedPos)) {
                 selectedPosition = clickedPos;
                 selectedPiece = clickedPiece;
+            } else {
+                lastRejectedPosition = clickedPos;
+                lastRejectedAtMillis = engine.getGameTimeMillis();
             }
         } else {
             Piece.Color opponentColor = (selectedPiece.getColor() == Piece.Color.WHITE) ? Piece.Color.BLACK : Piece.Color.WHITE;
@@ -161,6 +171,12 @@ public class InteractionHandler {
             }
 
             board.movePiece(threateningEnemyMove.getFrom(), threateningEnemyMove.getTo());
+            // This is a MOVE being forced to complete early by a jump threat,
+            // not a jump itself - the piece being moved never called
+            // handleJump, so it gets the same move -> long_rest duration a
+            // normally-arriving move gets in MovementEngine.
+            // resolveSimultaneousArrivals, not the shorter jump -> short_rest.
+            engine.markResting(threateningEnemyMove.getTo(), EnginePort.REST_AFTER_MOVE_MS);
 
             engine.removeMove(threateningEnemyMove);
             selectedPosition = null;
