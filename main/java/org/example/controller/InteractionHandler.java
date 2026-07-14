@@ -22,12 +22,22 @@ public class InteractionHandler {
     private final EnginePort engine;
     private final MoveValidationPort moveValidationService;
     private Position selectedPosition;
+    // The exact Piece object present at selectedPosition at the moment it was
+    // selected. Piece has no value-based equals()/hashCode(), so this is a
+    // reference-identity token: it lets the second click verify that the
+    // piece the player originally picked is still physically the one
+    // occupying that square, instead of trusting whatever piece happens to
+    // be there now. Board.movePiece/setPiece always swap in a new Piece
+    // reference on capture/replace - they never mutate a Piece in place -
+    // so a reference mismatch reliably means "the original piece is gone."
+    private Piece selectedPiece;
 
     public InteractionHandler(Board board, EnginePort engine, MoveValidationPort moveValidationService) {
         this.board = board;
         this.engine = engine;
         this.moveValidationService = moveValidationService;
         this.selectedPosition = null;
+        this.selectedPiece = null;
     }
 
     public void handleClick(int x, int y) {
@@ -44,15 +54,35 @@ public class InteractionHandler {
         if (selectedPosition == null) {
             if (clickedPiece != null && !engine.isPieceMovingFrom(clickedPos)) {
                 selectedPosition = clickedPos;
+                selectedPiece = clickedPiece;
             }
             return;
         }
 
-        Piece selectedPiece = board.getPiece(selectedPosition);
+        // Stale-selection guard: re-fetch whatever is at selectedPosition right
+        // now and compare it by reference against the piece that was actually
+        // selected. Time has passed since the first click (the engine may have
+        // ticked and resolved captures in between), so selectedPosition alone
+        // is not trustworthy - the piece it pointed to may have been captured
+        // and replaced by an opponent's piece on the same square. Acting on the
+        // coordinate without this check would silently execute the move using
+        // the WRONG piece (e.g. the opponent's), rather than the one the player
+        // actually clicked.
+        Piece currentOccupant = board.getPiece(selectedPosition);
+        if (currentOccupant != selectedPiece) {
+            selectedPosition = null;
+            selectedPiece = null;
+            // The player's second click is still a meaningful action (e.g. they
+            // clicked Piece B) - reprocess it as a fresh first click instead of
+            // silently dropping it, so they don't have to click twice.
+            handleClick(x, y);
+            return;
+        }
 
         if (clickedPiece != null && clickedPiece.getColor() == selectedPiece.getColor()) {
             if (!engine.isPieceMovingFrom(clickedPos)) {
                 selectedPosition = clickedPos;
+                selectedPiece = clickedPiece;
             }
         } else {
             Piece.Color opponentColor = (selectedPiece.getColor() == Piece.Color.WHITE) ? Piece.Color.BLACK : Piece.Color.WHITE;
@@ -71,6 +101,7 @@ public class InteractionHandler {
                 engine.addMove(new ActiveMove(selectedPosition, clickedPos, selectedPiece, arrivalTime, false));
             }
             selectedPosition = null;
+            selectedPiece = null;
         }
     }
 
@@ -112,6 +143,7 @@ public class InteractionHandler {
 
             engine.removeMove(threateningEnemyMove);
             selectedPosition = null;
+            selectedPiece = null;
             return;
         }
 
@@ -119,5 +151,6 @@ public class InteractionHandler {
         ActiveMove jump = new ActiveMove(pos, pos, piece, arrivalTime, true);
         engine.addMove(jump);
         selectedPosition = null;
+        selectedPiece = null;
     }
 }
