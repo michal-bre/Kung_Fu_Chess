@@ -1,5 +1,6 @@
 package org.example.view;
 
+import org.example.controller.GameController;
 import org.example.engine.ActiveMove;
 import org.example.engine.EnginePort;
 import org.example.model.Board;
@@ -31,10 +32,14 @@ import java.util.Set;
  * layer, so no port is needed just to read it. It also depends on the
  * engine layer's EnginePort ABSTRACTION (never the concrete
  * MovementEngine) - the same dependency-inversion the controller layer
- * already follows - purely to read in-flight move state for animation;
- * BoardView never calls any of EnginePort's mutating methods.
+ * already follows - purely to read in-flight move state for animation. It
+ * additionally depends on GameController itself (not just an abstraction -
+ * BoardInputListener already calls into it directly, so the view layer
+ * already treats it as its facade into the controller layer), solely to
+ * read transient click-rejection feedback for the flash effect below.
  *
- * BoardView never mutates the board or the engine, only reads them.
+ * BoardView never mutates the board, engine, or controller - it only reads
+ * them.
  */
 public class BoardView extends JPanel {
 
@@ -44,14 +49,20 @@ public class BoardView extends JPanel {
     // don't visually collide with their square's border.
     private static final int PIECE_PADDING_PX = 10;
 
+    // How long a rejected-move flash stays visible, fading out over this
+    // window rather than disappearing abruptly.
+    private static final long REJECTION_FLASH_DURATION_MS = 400;
+
     private final Board board;
     private final EnginePort engine;
+    private final GameController gameController;
     private final BufferedImage boardImage;
     private final PieceSprites pieceSprites = new PieceSprites();
 
-    public BoardView(Board board, EnginePort engine) {
+    public BoardView(Board board, EnginePort engine, GameController gameController) {
         this.board = board;
         this.engine = engine;
+        this.gameController = gameController;
 
         int pixelWidth = board.getWidth() * Board.CELL_SIZE;
         int pixelHeight = board.getHeight() * Board.CELL_SIZE;
@@ -79,7 +90,36 @@ public class BoardView extends JPanel {
         super.paintComponent(g);
         g.drawImage(boardImage, 0, 0, null);
         paintPieces((Graphics2D) g);
+        paintRejectionFeedback((Graphics2D) g);
         paintGameOverCaption((Graphics2D) g);
+    }
+
+    /**
+     * Briefly flashes red over a square whose move attempt was just
+     * rejected (illegal move shape, blocked path, opponent mid-move, etc.).
+     * A rejected click is otherwise a total no-op - nothing on the board
+     * changes - which is indistinguishable from "the click didn't register
+     * at all" without some feedback. Fades out over
+     * REJECTION_FLASH_DURATION_MS rather than disappearing on the next
+     * frame, so a single rejected click is still visible even between two
+     * GameLoop ticks.
+     */
+    private void paintRejectionFeedback(Graphics2D g) {
+        Position rejected = gameController.getLastRejectedPosition();
+        if (rejected == null) return;
+
+        long elapsed = engine.getGameTimeMillis() - gameController.getLastRejectedAtMillis();
+        if (elapsed < 0 || elapsed >= REJECTION_FLASH_DURATION_MS) return;
+
+        float fade = 1f - (elapsed / (float) REJECTION_FLASH_DURATION_MS);
+        int alpha = Math.round(160 * fade);
+
+        g.setColor(new Color(220, 30, 30, alpha));
+        g.fillRect(
+                rejected.getCol() * Board.CELL_SIZE,
+                rejected.getRow() * Board.CELL_SIZE,
+                Board.CELL_SIZE,
+                Board.CELL_SIZE);
     }
 
     /**

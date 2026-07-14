@@ -1,6 +1,7 @@
 package org.example.controller;
 
 import org.example.engine.EnginePort;
+import org.example.model.Position;
 
 /**
  * Controller layer: application entry point / coordinator.
@@ -35,5 +36,14 @@ public class GameController {
 
     public void advanceTime(long millis) {
         engine.advanceTime(millis);
+    }
+
+    // Read-only view-layer feedback: see InteractionHandler.lastRejectedPosition.
+    public Position getLastRejectedPosition() {
+        return interactionHandler.getLastRejectedPosition();
+    }
+
+    public long getLastRejectedAtMillis() {
+        return interactionHandler.getLastRejectedAtMillis();
     }
 }

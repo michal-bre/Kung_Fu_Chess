@@ -52,7 +52,7 @@ public class GuiMain {
         InteractionHandler interactionHandler = new InteractionHandler(board, movementEngine, moveValidationService);
         GameController gameController = new GameController(movementEngine, interactionHandler);
 
-        BoardView boardView = new BoardView(board, movementEngine);
+        BoardView boardView = new BoardView(board, movementEngine, gameController);
         boardView.addMouseListener(new BoardInputListener(gameController, boardView::repaint));
 
         GameWindow window = new GameWindow("Kung Fu Chess", boardView);

@@ -32,12 +32,30 @@ public class InteractionHandler {
     // so a reference mismatch reliably means "the original piece is gone."
     private Piece selectedPiece;
 
+    // Transient feedback for the view layer only: which square (if any) most
+    // recently refused a move attempt, and when. A rejected move is a silent
+    // no-op as far as the engine/model are concerned (nothing changes), which
+    // is indistinguishable from "did my click even register?" without this -
+    // BoardView reads it to flash the square briefly instead of leaving the
+    // player guessing whether the click landed. Purely observational: nothing
+    // in this class's own control flow depends on these fields.
+    private Position lastRejectedPosition;
+    private long lastRejectedAtMillis = Long.MIN_VALUE;
+
     public InteractionHandler(Board board, EnginePort engine, MoveValidationPort moveValidationService) {
         this.board = board;
         this.engine = engine;
         this.moveValidationService = moveValidationService;
         this.selectedPosition = null;
         this.selectedPiece = null;
+    }
+
+    public Position getLastRejectedPosition() {
+        return lastRejectedPosition;
+    }
+
+    public long getLastRejectedAtMillis() {
+        return lastRejectedAtMillis;
     }
 
     public void handleClick(int x, int y) {
@@ -99,6 +117,9 @@ public class InteractionHandler {
                 long arrivalTime = engine.getGameTimeMillis() + totalTravelTime;
 
                 engine.addMove(new ActiveMove(selectedPosition, clickedPos, selectedPiece, arrivalTime, false));
+            } else {
+                lastRejectedPosition = clickedPos;
+                lastRejectedAtMillis = engine.getGameTimeMillis();
             }
             selectedPosition = null;
             selectedPiece = null;
