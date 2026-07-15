@@ -66,6 +66,48 @@ public class Img {
 
     public Img read(String path) { return read(path, null, false, null); }
 
+    /* ----------- construct without loading from disk -----------
+     * Purely additive - existing behavior-preserving reasoning for the
+     * read()-based constructors above is untouched. These three exist so a
+     * caller (e.g. a Renderer) can build/duplicate/wrap an in-memory canvas
+     * without needing a file on disk for every frame it draws. */
+
+    /** A fresh, blank canvas of the given size - not loaded from any file. */
+    public static Img blank(int width, int height, boolean hasAlpha) {
+        Img canvas = new Img();
+        canvas.img = new BufferedImage(width, height,
+                hasAlpha ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
+        return canvas;
+    }
+
+    /** Wraps an already-in-memory BufferedImage as an Img, without copying it. */
+    public static Img wrap(BufferedImage image) {
+        Img wrapped = new Img();
+        wrapped.img = image;
+        return wrapped;
+    }
+
+    /** An independent copy of this image - mutating the copy never affects the original. */
+    public Img copy() {
+        if (img == null) throw new IllegalStateException("Image not loaded.");
+
+        BufferedImage dst = new BufferedImage(img.getWidth(), img.getHeight(), img.getType());
+        Graphics2D g = dst.createGraphics();
+        g.drawImage(img, 0, 0, null);
+        g.dispose();
+        return wrap(dst);
+    }
+
+    /* ----------- draw a flat, optionally translucent rectangle ----------- */
+    public void fillRect(int x, int y, int width, int height, Color color) {
+        if (img == null) throw new IllegalStateException("Image not loaded.");
+
+        Graphics2D g = img.createGraphics();
+        g.setColor(color);
+        g.fillRect(x, y, width, height);
+        g.dispose();
+    }
+
     /* ----------- draw this image onto another ----------- */
     public void drawOn(Img other, int x, int y) {
         if (img == null || other.img == null)

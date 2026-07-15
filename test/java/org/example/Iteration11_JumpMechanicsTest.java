@@ -63,11 +63,17 @@ public class Iteration11_JumpMechanicsTest {
     @Test
     public void testAirCaptureOfMovingEnemy() {
         board.setPiece(0, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK)); // Airborne
-        board.setPiece(0, 1, new Piece(Piece.Color.BLACK, Piece.Type.PAWN)); // Enemy moving from (0,1) to (0,0)
+        // A rook here (not a pawn - a pawn can only ever capture one square
+        // diagonally FORWARD, and moving from (0,1) to (0,0) is sideways,
+        // which is illegal regardless of what's on the target square) so
+        // this move is a legal one-square horizontal slide, not a capture
+        // shortcut that happens to line up with the jump-capture mechanic
+        // being tested here.
+        board.setPiece(0, 1, new Piece(Piece.Color.BLACK, Piece.Type.ROOK)); // Enemy moving from (0,1) to (0,0)
 
         gameController.handleJump(50, 50); // White Rook jumps at (0,0)
 
-        gameController.handleClick(150, 50); // Select black pawn at (0,1)
+        gameController.handleClick(150, 50); // Select black rook at (0,1)
         gameController.handleClick(50, 50);  // Move to (0,0)
 
         gameController.advanceTime(500); // During jump window
@@ -91,6 +97,77 @@ public class Iteration11_JumpMechanicsTest {
         // If jump logic is blocked, the piece should continue its move normally
         gameController.advanceTime(1000);
         assertNotNull("Piece should complete its move to destination", board.getPiece(new Position(0, 1)));
+    }
+
+    @Test
+    public void testRestingPieceCannotJump() {
+        board.setPiece(0, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
+        board.setPiece(0, 3, new Piece(Piece.Color.BLACK, Piece.Type.QUEEN));
+
+        // White rook moves (0,0) -> (0,1) [1 square, 1000ms travel]. Once it
+        // lands it enters its REST_AFTER_MOVE_MS (3000ms) cooldown.
+        gameController.handleClick(50, 50);
+        gameController.handleClick(150, 50);
+        gameController.advanceTime(1000);
+        assertEquals("Rook should have completed its move", Piece.Type.ROOK,
+                board.getPiece(new Position(0, 1)).getType());
+
+        // Black queen immediately attacks the now-resting rook: (0,3) -> (0,1),
+        // 2 squares, 2000ms travel. The rook's rest (ends at game time 4000ms)
+        // covers the queen's entire flight (game time 1000ms -> 3000ms).
+        gameController.handleClick(350, 50);
+        gameController.handleClick(150, 50);
+
+        // 500ms into the attack - well within JUMP_DEFENSE_WINDOW_MS (800ms),
+        // which would normally let a defensive jump defeat the attacker. But
+        // the rook is still resting from its own move, so this jump attempt
+        // must be rejected outright rather than being treated as a valid,
+        // in-time defense.
+        gameController.advanceTime(500);
+        gameController.handleJump(150, 50);
+
+        // Let the queen's attack land naturally. If the jump above had been
+        // wrongly allowed, it would have air-captured the incoming queen
+        // (see triggerAirCaptures) and the white rook would still be standing
+        // on (0,1). Since resting correctly blocked the jump, no defending
+        // move was ever created, so the queen's attack completes normally and
+        // captures the resting rook instead.
+        gameController.advanceTime(1500);
+
+        assertEquals("Black queen should have captured the resting rook", Piece.Color.BLACK,
+                board.getPiece(new Position(0, 1)).getColor());
+        assertEquals(Piece.Type.QUEEN, board.getPiece(new Position(0, 1)).getType());
+    }
+
+    @Test
+    public void testLandedJumpDoesNotDefendAgainstLaterAttack() {
+        // A jump only has capture power while it is genuinely in flight (or
+        // at the exact instant it lands in the same tick an attacker
+        // arrives) - see MovementEngine.advanceTime. Once it has fully
+        // landed, it is just an ordinary resting piece: an attack that
+        // starts (and is therefore still approaching) AFTER it has already
+        // landed must succeed normally when it arrives, not be defeated by
+        // the long-since-completed jump.
+        board.setPiece(0, 0, new Piece(Piece.Color.WHITE, Piece.Type.ROOK));
+        board.setPiece(0, 3, new Piece(Piece.Color.BLACK, Piece.Type.QUEEN));
+
+        // Prophylactic jump, no threat present yet - lands at t=1000ms.
+        gameController.handleJump(50, 50);
+        gameController.advanceTime(1000);
+        assertNotNull("Rook should have landed from its jump", board.getPiece(new Position(0, 0)));
+
+        // Black queen attacks the now-landed rook well after it landed:
+        // (0,3) -> (0,0), 3 squares, 3000ms travel.
+        gameController.advanceTime(100);
+        gameController.handleClick(350, 50);
+        gameController.handleClick(50, 50);
+
+        // Let the attack run its full, natural course.
+        gameController.advanceTime(3000);
+
+        assertEquals("Black queen should capture the long-since-landed rook", Piece.Color.BLACK,
+                board.getPiece(new Position(0, 0)).getColor());
+        assertEquals(Piece.Type.QUEEN, board.getPiece(new Position(0, 0)).getType());
     }
 
     @Test

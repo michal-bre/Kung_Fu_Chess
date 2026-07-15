@@ -1,8 +1,11 @@
 package org.example;
 
 import org.example.adapters.BoardParser;
+import org.example.controller.BoardMapper;
 import org.example.controller.GameController;
 import org.example.controller.InteractionHandler;
+import org.example.engine.DefaultGameEngine;
+import org.example.engine.GameEngine;
 import org.example.engine.MovementEngine;
 import org.example.model.Board;
 import org.example.rules.MoveValidationService;
@@ -11,6 +14,8 @@ import org.example.view.BoardView;
 import org.example.view.GameLoop;
 import org.example.view.GamePanel;
 import org.example.view.GameWindow;
+import org.example.view.ImgRenderer;
+import org.example.view.Renderer;
 
 import java.util.Arrays;
 import java.util.List;
@@ -25,14 +30,19 @@ import java.util.List;
  * the engine/rules/controller/adapters layers references org.example.view
  * or this class.
  *
- * Phase 1 drew the empty board; Phase 2 put the pieces on it. This phase
- * makes it interactive: mouse input is routed to the same
- * engine/rules/controller stack the CLI drives (identical wiring to
- * Main.java / TestGameControllerFactory - GuiMain is just a different front
- * end onto it), and a GameLoop keeps real-time moves advancing and the view
- * redrawing on its own, since nothing here types WAIT commands.
+ * Wiring reflects the architecture-review fixes: DefaultGameEngine (the
+ * application-service facade) and BoardMapper (the coordinate adapter) sit
+ * between InteractionHandler and the lower-level MovementEngine/Board: the
+ * mouse-driven GUI and the text-driven CLI (Main.java) both go through the
+ * exact same GameController.handleClick/handleJump entry points, which was
+ * always true and remains true here. What's new is that the view side
+ * (BoardView/ImgRenderer) is wired entirely off GameController.getSnapshot()
+ * - BoardView/ImgRenderer never receive a Board, GameEngine, or
+ * GameController reference of their own.
  */
 public class GuiMain {
+
+    private static final int CELL_SIZE = Board.CELL_SIZE;
 
     public static void main(String[] args) {
         List<String> startingPosition = Arrays.asList(
@@ -50,13 +60,17 @@ public class GuiMain {
 
         MovementEngine movementEngine = new MovementEngine(board);
         MoveValidationService moveValidationService = new MoveValidationService(board, movementEngine);
-        InteractionHandler interactionHandler = new InteractionHandler(board, movementEngine, moveValidationService);
-        GameController gameController = new GameController(movementEngine, interactionHandler);
+        GameEngine gameEngine = new DefaultGameEngine(board, movementEngine, moveValidationService, CELL_SIZE);
+        BoardMapper boardMapper = new BoardMapper(CELL_SIZE, board.getHeight(), board.getWidth());
+        InteractionHandler interactionHandler = new InteractionHandler(board, gameEngine, boardMapper);
+        GameController gameController = new GameController(gameEngine, interactionHandler);
 
-        BoardView boardView = new BoardView(board, movementEngine, gameController);
+        Renderer renderer = new ImgRenderer(CELL_SIZE);
+        BoardView boardView = new BoardView(renderer, gameController::getSnapshot,
+                board.getWidth(), board.getHeight(), CELL_SIZE);
         boardView.addMouseListener(new BoardInputListener(gameController, boardView::getScale, boardView::repaint));
 
-        GamePanel gamePanel = new GamePanel(boardView, movementEngine, gameController);
+        GamePanel gamePanel = new GamePanel(boardView, gameController);
 
         GameWindow window = new GameWindow("Kung Fu Chess", gamePanel);
         window.show();

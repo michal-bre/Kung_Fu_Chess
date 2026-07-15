@@ -1,7 +1,10 @@
 package org.example;
 
+import org.example.controller.BoardMapper;
 import org.example.controller.GameController;
 import org.example.controller.InteractionHandler;
+import org.example.engine.DefaultGameEngine;
+import org.example.engine.GameEngine;
 import org.example.engine.MovementEngine;
 import org.example.model.Board;
 import org.example.rules.MoveValidationService;
@@ -17,16 +20,23 @@ import org.example.rules.MoveValidationService;
  * This factory performs the same manual wiring the composition root
  * (Main.java) performs, so existing tests can keep writing
  * `TestGameControllerFactory.create(board)` instead of repeating the wiring
- * at every call site.
+ * at every call site. As of the architecture-review fixes, that wiring now
+ * includes DefaultGameEngine (the application-service facade InteractionHandler
+ * talks to) and BoardMapper (the pixel-to-Position coordinate adapter) -
+ * every existing test keeps working unchanged because GameController's own
+ * public API (handleClick/handleJump/advanceTime/getMoveHistory/getScore/
+ * etc.) did not change shape, only what's wired up behind it.
  */
 public final class TestGameControllerFactory {
     private TestGameControllerFactory() {
     }
 
     public static GameController create(Board board) {
-        MovementEngine engine = new MovementEngine(board);
-        MoveValidationService moveValidationService = new MoveValidationService(board, engine);
-        InteractionHandler interactionHandler = new InteractionHandler(board, engine, moveValidationService);
-        return new GameController(engine, interactionHandler);
+        MovementEngine movementEngine = new MovementEngine(board);
+        MoveValidationService moveValidationService = new MoveValidationService(board, movementEngine);
+        GameEngine gameEngine = new DefaultGameEngine(board, movementEngine, moveValidationService, Board.CELL_SIZE);
+        BoardMapper boardMapper = new BoardMapper(Board.CELL_SIZE, board.getHeight(), board.getWidth());
+        InteractionHandler interactionHandler = new InteractionHandler(board, gameEngine, boardMapper);
+        return new GameController(gameEngine, interactionHandler);
     }
 }

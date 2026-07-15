@@ -5,8 +5,11 @@ import org.example.adapters.BoardPresenter;
 import org.example.adapters.CommandLineAdapter;
 import org.example.adapters.CommandLineAdapter.InputData;
 import org.example.adapters.CommandLineAdapter.ParsedCommand;
+import org.example.controller.BoardMapper;
 import org.example.controller.GameController;
 import org.example.controller.InteractionHandler;
+import org.example.engine.DefaultGameEngine;
+import org.example.engine.GameEngine;
 import org.example.engine.MovementEngine;
 import org.example.model.Board;
 import org.example.rules.MoveValidationService;
@@ -25,11 +28,17 @@ import java.util.Scanner;
  * Responsibilities:
  * - Read input (via CommandLineAdapter)
  * - Parse board (via BoardParser)
- * - Construct concrete rules/engine implementations and inject them into the
- *   controller layer via constructors (no layer creates its own
- *   collaborators internally anymore)
+ * - Construct concrete rules/engine implementations, the DefaultGameEngine
+ *   application-service facade, and the BoardMapper coordinate adapter, and
+ *   inject them into the controller layer via constructors (no layer creates
+ *   its own collaborators internally anymore)
  * - Print the board directly via BoardPresenter (GameController has no
  *   knowledge of the adapters/UI layer)
+ *
+ * This CLI entry point and GuiMain (the Swing entry point) both drive the
+ * exact same GameController.handleClick/handleJump/advanceTime methods -
+ * proof that the controller layer genuinely doesn't care whether input came
+ * from a mouse or a typed command.
  */
 public class Main {
     public static void main(String[] args) {
@@ -47,8 +56,10 @@ public class Main {
             // the classes that consume it.
             MovementEngine movementEngine = new MovementEngine(board);
             MoveValidationService moveValidationService = new MoveValidationService(board, movementEngine);
-            InteractionHandler interactionHandler = new InteractionHandler(board, movementEngine, moveValidationService);
-            GameController gameController = new GameController(movementEngine, interactionHandler);
+            GameEngine gameEngine = new DefaultGameEngine(board, movementEngine, moveValidationService, Board.CELL_SIZE);
+            BoardMapper boardMapper = new BoardMapper(Board.CELL_SIZE, board.getHeight(), board.getWidth());
+            InteractionHandler interactionHandler = new InteractionHandler(board, gameEngine, boardMapper);
+            GameController gameController = new GameController(gameEngine, interactionHandler);
             BoardPresenter boardPresenter = new BoardPresenter(board);
 
             // Execute commands

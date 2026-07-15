@@ -1,9 +1,22 @@
 package org.example.model;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * Model layer: pure domain entity, zero dependencies on any other layer.
  */
 public class Piece {
+
+    // A per-instance identity distinct from (color, type) - two different
+    // pieces of the same color/type (e.g. two white pawns) are otherwise
+    // indistinguishable by value. Used only so outer layers (e.g. a
+    // rendering snapshot) can refer to "this specific piece" without leaking
+    // a live Piece reference - see org.example.engine.PieceSnapshot. Purely
+    // additive: every existing two-argument constructor call keeps working
+    // unchanged, and nothing in model/rules/engine/controller reads this
+    // field for game logic.
+    private static final AtomicLong NEXT_ID = new AtomicLong(1);
+    private final long id;
 
     public enum Color {
         WHITE('w'), BLACK('b');
@@ -87,6 +100,7 @@ public class Piece {
     public Piece(Color color, Type type) {
         this.color = color;
         this.type = type;
+        this.id = NEXT_ID.getAndIncrement();
     }
 
     public Color getColor() {
@@ -95,6 +109,10 @@ public class Piece {
 
     public Type getType() {
         return type;
+    }
+
+    public String getId() {
+        return "p" + id;
     }
 
     @Override

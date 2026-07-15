@@ -63,6 +63,16 @@ public interface EnginePort {
     boolean isGameOver();
     void setGameOver(boolean gameOver);
 
+    // Who won, tracked explicitly at the moment a king is actually captured
+    // (see MovementEngine.resolveSimultaneousArrivals, triggerAirCaptures,
+    // and DefaultGameEngine.requestJump's forced-completion path) - never
+    // inferred later by scanning the board for which king is still standing.
+    // Null until isGameOver() is true; may remain null even once the game is
+    // over, for an end condition that has no single-color "winner" (e.g. a
+    // future draw/timeout rule).
+    Piece.Color getWinner();
+    void setWinner(Piece.Color winner);
+
     // Running material score per side, driven by org.example.rules.
     // PieceScore point values. The engine credits this itself at every
     // capture site it resolves (MovementEngine.resolveSimultaneousArrivals,

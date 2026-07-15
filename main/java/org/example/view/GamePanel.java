@@ -2,7 +2,6 @@ package org.example.view;
 
 import org.example.controller.GameController;
 import org.example.controller.MoveHistoryEntry;
-import org.example.engine.EnginePort;
 import org.example.model.Piece;
 
 import javax.swing.*;
@@ -22,10 +21,11 @@ import java.util.List;
  * has to know about the other's internals.
  *
  * Score and move history are both purely derived, read-only views over
- * engine/controller state (EnginePort.getScore, GameController.
- * getMoveHistory) - this class never mutates game state, only refreshes its
- * own display from it once per GameLoop tick (see refresh(), called
- * alongside boardView.repaint() from GuiMain).
+ * GameController state (GameController.getScore, GameController.
+ * getMoveHistory) - this class never mutates game state, and never touches
+ * GameEngine/EnginePort/Board directly, only GameController - and only
+ * refreshes its own display from it once per GameLoop tick (see refresh(),
+ * called alongside boardView.repaint() from GuiMain).
  */
 public class GamePanel extends JPanel implements ScreenFittable {
 
@@ -34,7 +34,6 @@ public class GamePanel extends JPanel implements ScreenFittable {
     private static final Font SCORE_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 16);
 
     private final BoardView boardView;
-    private final EnginePort engine;
     private final GameController gameController;
 
     private final JLabel blackScoreLabel = new JLabel("Black — Score: 0", SwingConstants.CENTER);
@@ -50,9 +49,8 @@ public class GamePanel extends JPanel implements ScreenFittable {
     private int blackHistoryRowsShown = 0;
     private int whiteHistoryRowsShown = 0;
 
-    public GamePanel(BoardView boardView, EnginePort engine, GameController gameController) {
+    public GamePanel(BoardView boardView, GameController gameController) {
         this.boardView = boardView;
-        this.engine = engine;
         this.gameController = gameController;
 
         setLayout(new BorderLayout());
@@ -107,8 +105,8 @@ public class GamePanel extends JPanel implements ScreenFittable {
      * whole table.
      */
     public void refresh() {
-        blackScoreLabel.setText("Black — Score: " + engine.getScore(Piece.Color.BLACK));
-        whiteScoreLabel.setText("White — Score: " + engine.getScore(Piece.Color.WHITE));
+        blackScoreLabel.setText("Black — Score: " + gameController.getScore(Piece.Color.BLACK));
+        whiteScoreLabel.setText("White — Score: " + gameController.getScore(Piece.Color.WHITE));
 
         List<MoveHistoryEntry> history = gameController.getMoveHistory();
         int blackSeen = 0;

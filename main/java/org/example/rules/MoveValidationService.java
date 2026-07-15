@@ -140,7 +140,12 @@ public class MoveValidationService implements MoveValidationPort {
             return false;
         }
 
-        if (absRow <= 1 && absCol <= 1 && !(absRow == 0 && absCol == 0)) {
+        // Capture: exactly one square diagonally FORWARD only - deltaRow must
+        // equal direction exactly (never 0, which would be a sideways
+        // "capture" onto the same row, and never -direction, which would be
+        // a backward capture) and absCol must be exactly 1 (never 0, already
+        // handled above, and never >1).
+        if (deltaRow == direction && absCol == 1) {
             return targetPiece != null && targetPiece.getColor() != pawn.getColor();
         }
 

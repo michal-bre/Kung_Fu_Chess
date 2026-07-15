@@ -44,6 +44,12 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     private final Map<Piece.Color, Integer> scores;
     private long gameTimeMillis;
     private boolean isGameOver;
+    // Named winnerColor (not "winner") to avoid colliding with the several
+    // local "ActiveMove winner" variables already used below (e.g. in
+    // resolveSimultaneousArrivals) - those name the winning MOVE of a
+    // contested square, a different concept from the winning COLOR of the
+    // whole game.
+    private Piece.Color winnerColor;
 
     // MOVE_DURATION_PER_SQUARE / JUMP_DURATION / REST_AFTER_MOVE_MS /
     // REST_AFTER_JUMP_MS are inherited from EnginePort.
@@ -122,6 +128,16 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     }
 
     @Override
+    public Piece.Color getWinner() {
+        return winnerColor;
+    }
+
+    @Override
+    public void setWinner(Piece.Color winner) {
+        this.winnerColor = winner;
+    }
+
+    @Override
     public void addMove(ActiveMove move) {
         activeMoves.add(move);
         triggerAirCaptures();
@@ -195,6 +211,10 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                     // Remove the enemy piece from the board at its starting position
                     board.setPiece(move.getFrom().getRow(), move.getFrom().getCol(), null);
                     addScore(activeJump.getPiece().getColor(), PieceScore.valueOf(move.getPiece().getType()));
+                    if (move.getPiece().getType() == Piece.Type.KING) {
+                        isGameOver = true;
+                        winnerColor = activeJump.getPiece().getColor();
+                    }
                     toRemove.add(move);
                 }
             }
@@ -237,21 +257,18 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
             markResting(completedJump.getTo(), EnginePort.REST_AFTER_JUMP_MS);
         }
 
-        // Check for air captures with moves still in transit
-        for (ActiveMove completedJump : completedJumps) {
-            List<ActiveMove> capturedInTransit = new ArrayList<>();
-            for (ActiveMove activeMove : activeMoves) {
-                if (!activeMove.isJump() && airCaptureService.isCapturedByJump(
-                        activeMove.getTo(), activeMove.getPiece().getColor(),
-                        completedJump.getTo(), completedJump.getPiece().getColor())) {
-                    // This enemy piece will be captured
-                    board.setPiece(activeMove.getFrom().getRow(), activeMove.getFrom().getCol(), null);
-                    addScore(completedJump.getPiece().getColor(), PieceScore.valueOf(activeMove.getPiece().getType()));
-                    capturedInTransit.add(activeMove);
-                }
-            }
-            activeMoves.removeAll(capturedInTransit);
-        }
+        // Deliberately NO check here for "completed jump vs. still-active
+        // (not-yet-arrived) enemy moves": a jump's capture power only exists
+        // while it is genuinely in flight (see triggerAirCaptures, invoked on
+        // every addMove - that's what lets a jump capture an incoming move
+        // the instant either one is created while the other is still
+        // active/airborne) or at the exact instant it lands in the same tick
+        // as an enemy's arrival (the simultaneous-completion check just
+        // below). Once a jump has completed and this tick's processing
+        // reaches this point, it is just a resting piece standing on a
+        // square - an enemy move that is STILL in transit at that moment is
+        // not defeated by it; that enemy will simply capture it normally,
+        // like any other piece, once its own move naturally arrives.
 
         // A move that was captured in-air by a simultaneous completed jump never lands
         // anywhere - drop it from the batch before resolving destinations.
@@ -265,6 +282,10 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                         jumpMove.getTo(), jumpMove.getPiece().getColor())) {
                     capturedInAir = true;
                     addScore(jumpMove.getPiece().getColor(), PieceScore.valueOf(normalMove.getPiece().getType()));
+                    if (normalMove.getPiece().getType() == Piece.Type.KING) {
+                        isGameOver = true;
+                        winnerColor = jumpMove.getPiece().getColor();
+                    }
                     break;
                 }
             }
@@ -340,6 +361,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
             for (ActiveMove loser : contenders.subList(1, contenders.size())) {
                 if (loser.getPiece().getType() == Piece.Type.KING) {
                     isGameOver = true;
+                    winnerColor = winner.getPiece().getColor();
                 }
                 addScore(winner.getPiece().getColor(), PieceScore.valueOf(loser.getPiece().getType()));
             }
@@ -353,6 +375,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                 }
                 if (existingOccupant.getType() == Piece.Type.KING) {
                     isGameOver = true;
+                    winnerColor = winner.getPiece().getColor();
                 }
                 addScore(winner.getPiece().getColor(), PieceScore.valueOf(existingOccupant.getType()));
             }

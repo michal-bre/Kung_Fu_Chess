@@ -205,6 +205,33 @@ public class Iteration5_PawnMovementTest {
     }
 
     @Test
+    public void testPawnCannotCaptureSideways() {
+        // An enemy piece directly beside the pawn (same row, adjacent
+        // column) is not a legal capture - only a genuine forward diagonal
+        // is. Unlike testPawnCannotMoveSideways above, this places a real
+        // enemy piece there, which is the scenario the old, overly-loose
+        // "absRow <= 1 && absCol <= 1" check would have wrongly allowed.
+        board.setPiece(6, 1, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+        board.setPiece(6, 0, new Piece(Piece.Color.BLACK, Piece.Type.ROOK));
+
+        boolean valid = moveValidator.isValidMove(new Position(6, 1), new Position(6, 0),
+                                                   board.getPiece(new Position(6, 1)));
+        assertFalse("Pawn cannot capture sideways, even with an enemy piece there", valid);
+    }
+
+    @Test
+    public void testPawnCannotCaptureDiagonallyBackward() {
+        // An enemy piece diagonally BEHIND the pawn is likewise not a legal
+        // capture - pawns only ever capture forward.
+        board.setPiece(5, 1, new Piece(Piece.Color.WHITE, Piece.Type.PAWN));
+        board.setPiece(6, 0, new Piece(Piece.Color.BLACK, Piece.Type.ROOK));
+
+        boolean valid = moveValidator.isValidMove(new Position(5, 1), new Position(6, 0),
+                                                   board.getPiece(new Position(5, 1)));
+        assertFalse("White pawn cannot capture diagonally backward", valid);
+    }
+
+    @Test
     public void testBlackPawnCaptureBothDiagonals() {
         board.setPiece(1, 1, new Piece(Piece.Color.BLACK, Piece.Type.PAWN));
         board.setPiece(2, 0, new Piece(Piece.Color.WHITE, Piece.Type.BISHOP));
