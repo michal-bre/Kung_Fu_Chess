@@ -1,7 +1,10 @@
 package org.example.controller;
 
 import org.example.engine.EnginePort;
+import org.example.model.Piece;
 import org.example.model.Position;
+
+import java.util.List;
 
 /**
  * Controller layer: application entry point / coordinator.
@@ -45,5 +48,16 @@ public class GameController {
 
     public long getLastRejectedAtMillis() {
         return interactionHandler.getLastRejectedAtMillis();
+    }
+
+    // Read-only view-layer feedback: see InteractionHandler.moveHistory.
+    public List<MoveHistoryEntry> getMoveHistory() {
+        return interactionHandler.getMoveHistory();
+    }
+
+    // Read-only view-layer feedback: running material score per side - see
+    // EnginePort.getScore.
+    public int getScore(Piece.Color color) {
+        return engine.getScore(color);
     }
 }

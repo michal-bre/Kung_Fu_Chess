@@ -6,8 +6,10 @@ import org.example.model.Position;
 import org.example.rules.ActiveMoveQuery;
 import org.example.rules.AirCaptureService;
 import org.example.rules.PawnPromotionService;
+import org.example.rules.PieceScore;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +40,8 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     private final List<ActiveMove> activeMoves;
     private final List<ActiveMove> recentlyCompletedMoves;
     private final Map<Position, Long> restingUntilMillis;
+    private final Map<Position, Long> restingDurationMillis;
+    private final Map<Piece.Color, Integer> scores;
     private long gameTimeMillis;
     private boolean isGameOver;
 
@@ -51,8 +55,22 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
         this.activeMoves = new ArrayList<>();
         this.recentlyCompletedMoves = new ArrayList<>();
         this.restingUntilMillis = new HashMap<>();
+        this.restingDurationMillis = new HashMap<>();
+        this.scores = new EnumMap<>(Piece.Color.class);
+        this.scores.put(Piece.Color.WHITE, 0);
+        this.scores.put(Piece.Color.BLACK, 0);
         this.gameTimeMillis = 0;
         this.isGameOver = false;
+    }
+
+    @Override
+    public int getScore(Piece.Color color) {
+        return scores.getOrDefault(color, 0);
+    }
+
+    @Override
+    public void addScore(Piece.Color color, int points) {
+        scores.merge(color, points, Integer::sum);
     }
 
     @Override
@@ -68,6 +86,19 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
         // square can only ever hold one piece at a time, so there is never a
         // reason to keep an older timer around once a new one is set here.
         restingUntilMillis.put(pos, gameTimeMillis + durationMillis);
+        restingDurationMillis.put(pos, durationMillis);
+    }
+
+    @Override
+    public long getRestingUntilMillis(Position pos) {
+        Long until = restingUntilMillis.get(pos);
+        return until != null ? until : -1;
+    }
+
+    @Override
+    public long getRestingDurationMillis(Position pos) {
+        Long duration = restingDurationMillis.get(pos);
+        return duration != null ? duration : -1;
     }
 
     @Override
@@ -163,6 +194,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                     // An enemy piece is moving to the same cell as the jumping piece
                     // Remove the enemy piece from the board at its starting position
                     board.setPiece(move.getFrom().getRow(), move.getFrom().getCol(), null);
+                    addScore(activeJump.getPiece().getColor(), PieceScore.valueOf(move.getPiece().getType()));
                     toRemove.add(move);
                 }
             }
@@ -214,6 +246,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                         completedJump.getTo(), completedJump.getPiece().getColor())) {
                     // This enemy piece will be captured
                     board.setPiece(activeMove.getFrom().getRow(), activeMove.getFrom().getCol(), null);
+                    addScore(completedJump.getPiece().getColor(), PieceScore.valueOf(activeMove.getPiece().getType()));
                     capturedInTransit.add(activeMove);
                 }
             }
@@ -231,6 +264,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                         normalMove.getTo(), normalMove.getPiece().getColor(),
                         jumpMove.getTo(), jumpMove.getPiece().getColor())) {
                     capturedInAir = true;
+                    addScore(jumpMove.getPiece().getColor(), PieceScore.valueOf(normalMove.getPiece().getType()));
                     break;
                 }
             }
@@ -307,6 +341,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                 if (loser.getPiece().getType() == Piece.Type.KING) {
                     isGameOver = true;
                 }
+                addScore(winner.getPiece().getColor(), PieceScore.valueOf(loser.getPiece().getType()));
             }
 
             if (existingOccupant != null) {
@@ -319,6 +354,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                 if (existingOccupant.getType() == Piece.Type.KING) {
                     isGameOver = true;
                 }
+                addScore(winner.getPiece().getColor(), PieceScore.valueOf(existingOccupant.getType()));
             }
 
             board.setPiece(destination.getRow(), destination.getCol(), winner.getPiece());

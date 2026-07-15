@@ -6,6 +6,11 @@ import org.example.model.Board;
 import org.example.model.Piece;
 import org.example.model.Position;
 import org.example.rules.MoveValidationPort;
+import org.example.rules.PieceScore;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Controller layer: translates raw pixel clicks/jumps into calls against the
@@ -42,6 +47,23 @@ public class InteractionHandler {
     private Position lastRejectedPosition;
     private long lastRejectedAtMillis = Long.MIN_VALUE;
 
+    // How long after an enemy's attacking move starts a defending jump can
+    // still succeed. A jump created within this window of the attack's
+    // start defeats it (see the air-capture check triggered by
+    // engine.addMove in handleJump below); created any later, the jump
+    // comes too late to plausibly be a real dodge, and the attacker's move
+    // is instead forced to complete immediately, capturing the piece that
+    // tried to jump. Chosen to comfortably cover a human's reaction time to
+    // seeing an attack begin, while still meaningfully punishing a jump
+    // that's reactive only in name.
+    private static final long JUMP_DEFENSE_WINDOW_MS = 800;
+
+    // Every move successfully created via handleClick, in the order they
+    // were made - see MoveHistoryEntry and getMoveHistory. Jumps aren't
+    // logged here; the table this feeds is meant to read like a standard
+    // move log, and a jump has no chess-notation equivalent.
+    private final List<MoveHistoryEntry> moveHistory = new ArrayList<>();
+
     public InteractionHandler(Board board, EnginePort engine, MoveValidationPort moveValidationService) {
         this.board = board;
         this.engine = engine;
@@ -56,6 +78,10 @@ public class InteractionHandler {
 
     public long getLastRejectedAtMillis() {
         return lastRejectedAtMillis;
+    }
+
+    public List<MoveHistoryEntry> getMoveHistory() {
+        return Collections.unmodifiableList(moveHistory);
     }
 
     public void handleClick(int x, int y) {
@@ -113,18 +139,26 @@ public class InteractionHandler {
                 lastRejectedAtMillis = engine.getGameTimeMillis();
             }
         } else {
-            Piece.Color opponentColor = (selectedPiece.getColor() == Piece.Color.WHITE) ? Piece.Color.BLACK : Piece.Color.WHITE;
-
-            // A new move cannot be created while the opponent already has a move in
-            // flight (jumps are exempt - isColorMoving ignores them): only one side may
-            // be actively moving at a time. This also blocks the target square if it's
-            // already reserved by an active move of the SAME color.
-            if (!engine.isColorMoving(opponentColor) &&
-                !engine.isSquareOccupiedByActiveMove(clickedPos, selectedPiece.getColor()) &&
+            // Both colors may have moves in flight at the same time - that's the
+            // whole premise of a real-time ("kung fu") chess variant, as opposed
+            // to a turn-based one. The only thing this blocks is the target
+            // square already being reserved by an active move of the SAME
+            // color - two of your own pieces can't be sent to the same square.
+            if (!engine.isSquareOccupiedByActiveMove(clickedPos, selectedPiece.getColor()) &&
                 moveValidationService.isValidMove(selectedPosition, clickedPos, selectedPiece)) {
                 int distance = moveValidationService.calculateDistance(selectedPosition, clickedPos);
                 long totalTravelTime = distance * EnginePort.MOVE_DURATION_PER_SQUARE;
                 long arrivalTime = engine.getGameTimeMillis() + totalTravelTime;
+
+                // clickedPiece != null here means an opponent piece currently
+                // stands on the destination - i.e. this move is a capture.
+                // Recorded from what's true right now, at click time, same as
+                // the rest of this method's validation - not re-derived later
+                // from whatever the board happens to look like on arrival.
+                moveHistory.add(new MoveHistoryEntry(
+                        selectedPiece.getColor(),
+                        engine.getGameTimeMillis(),
+                        formatNotation(selectedPiece, selectedPosition, clickedPos, clickedPiece != null)));
 
                 engine.addMove(new ActiveMove(selectedPosition, clickedPos, selectedPiece, arrivalTime, false));
             } else {
@@ -153,41 +187,87 @@ public class InteractionHandler {
 
         if (engine.isPieceMovingFrom(pos)) return;
 
-        ActiveMove threateningEnemyMove = null;
+        // If an enemy move targeting this square has been in flight for
+        // longer than JUMP_DEFENSE_WINDOW_MS, the jump comes too late: the
+        // attacker's move is forced to complete immediately instead of
+        // being defended against, capturing the piece that tried to jump.
+        ActiveMove lateEnemyMove = null;
         for (ActiveMove move : engine.getActiveMoves()) {
-            if (move.getTo().equals(pos) && move.getPiece().getColor() != piece.getColor()) {
-                long moveStartTime = move.getArrivalTimeMillis() - (moveValidationService.calculateDistance(move.getFrom(), move.getTo()) * EnginePort.MOVE_DURATION_PER_SQUARE);
-                if (engine.getGameTimeMillis() > moveStartTime) {
-                    threateningEnemyMove = move;
+            if (!move.isJump() && move.getTo().equals(pos) && move.getPiece().getColor() != piece.getColor()) {
+                long distance = moveValidationService.calculateDistance(move.getFrom(), move.getTo());
+                long moveStartTime = move.getArrivalTimeMillis() - (distance * EnginePort.MOVE_DURATION_PER_SQUARE);
+                long elapsedSinceStart = engine.getGameTimeMillis() - moveStartTime;
+                if (elapsedSinceStart > JUMP_DEFENSE_WINDOW_MS) {
+                    lateEnemyMove = move;
                     break;
                 }
             }
         }
 
-        if (threateningEnemyMove != null) {
-            Piece targetPiece = board.getPiece(threateningEnemyMove.getTo());
-            if (targetPiece != null && targetPiece.getType() == Piece.Type.KING) {
-                engine.setGameOver(true);
+        if (lateEnemyMove != null) {
+            Piece targetPiece = board.getPiece(lateEnemyMove.getTo());
+            if (targetPiece != null) {
+                if (targetPiece.getType() == Piece.Type.KING) {
+                    engine.setGameOver(true);
+                }
+                // This capture happens here directly (board.movePiece below),
+                // not through any of MovementEngine's own capture-resolution
+                // paths, so it has to report the score credit back in itself.
+                engine.addScore(lateEnemyMove.getPiece().getColor(), PieceScore.valueOf(targetPiece.getType()));
             }
 
-            board.movePiece(threateningEnemyMove.getFrom(), threateningEnemyMove.getTo());
-            // This is a MOVE being forced to complete early by a jump threat,
-            // not a jump itself - the piece being moved never called
-            // handleJump, so it gets the same move -> long_rest duration a
-            // normally-arriving move gets in MovementEngine.
-            // resolveSimultaneousArrivals, not the shorter jump -> short_rest.
-            engine.markResting(threateningEnemyMove.getTo(), EnginePort.REST_AFTER_MOVE_MS);
+            board.movePiece(lateEnemyMove.getFrom(), lateEnemyMove.getTo());
+            // This is a MOVE being forced to complete early because the
+            // defending jump came too late, not a jump itself - the piece
+            // being moved never called handleJump, so it gets the same
+            // move -> long_rest duration a normally-arriving move gets in
+            // MovementEngine.resolveSimultaneousArrivals, not the shorter
+            // jump -> short_rest.
+            engine.markResting(lateEnemyMove.getTo(), EnginePort.REST_AFTER_MOVE_MS);
 
-            engine.removeMove(threateningEnemyMove);
+            engine.removeMove(lateEnemyMove);
             selectedPosition = null;
             selectedPiece = null;
             return;
         }
 
+        // Within the reaction window (or against no threat at all): jumping
+        // here defends the square normally. engine.addMove below runs
+        // MovementEngine.triggerAirCaptures, which checks every active jump
+        // against every active move for a same-square, different-color
+        // collision and removes the loser - that's where an incoming
+        // attacker actually gets captured.
         long arrivalTime = engine.getGameTimeMillis() + EnginePort.JUMP_DURATION;
         ActiveMove jump = new ActiveMove(pos, pos, piece, arrivalTime, true);
         engine.addMove(jump);
         selectedPosition = null;
         selectedPiece = null;
+    }
+
+    /**
+     * A simplified algebraic-style move description - see MoveHistoryEntry
+     * for exactly what's (and isn't) covered.
+     */
+    private String formatNotation(Piece piece, Position from, Position to, boolean isCapture) {
+        String destination = squareName(to);
+        if (piece.getType() == Piece.Type.PAWN) {
+            return isCapture ? (fileLetter(from.getCol()) + "x" + destination) : destination;
+        }
+        return piece.getType().getSymbol() + (isCapture ? "x" : "") + destination;
+    }
+
+    private String squareName(Position pos) {
+        return "" + fileLetter(pos.getCol()) + rankNumber(pos.getRow());
+    }
+
+    private static char fileLetter(int col) {
+        return (char) ('a' + col);
+    }
+
+    private int rankNumber(int row) {
+        // Row 0 is the top of the board (the initial black back rank, i.e.
+        // chess rank 8 - see GuiMain's starting position), so rank counts
+        // down as row counts up.
+        return board.getHeight() - row;
     }
 }

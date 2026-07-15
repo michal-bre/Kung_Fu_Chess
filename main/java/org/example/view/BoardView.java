@@ -11,7 +11,9 @@ import org.example.view.imglib.Img;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -40,8 +42,30 @@ import java.util.Set;
  *
  * BoardView never mutates the board, engine, or controller - it only reads
  * them.
+ *
+ * Display scaling: all internal drawing math (piece cells, the board image,
+ * the rejection flash, the game-over caption) is computed in a fixed LOGICAL
+ * pixel space of exactly board.getWidth()*CELL_SIZE x
+ * board.getHeight()*CELL_SIZE - the same space InteractionHandler's
+ * row = y / CELL_SIZE, col = x / CELL_SIZE math assumes. That logical space
+ * can be larger than the screen (e.g. an 8-row board is 800px tall before
+ * any window chrome, which some laptop/VM screens can't fit alongside a
+ * title bar and taskbar), so the panel is scaled down to fit the display's
+ * available work area via a single Graphics2D.scale() applied once at the
+ * top of paintComponent - every existing pixel calculation below keeps
+ * working unmodified in logical space; only the actual on-screen size
+ * (getPreferredSize) and the final rendered pixels are affected. Mouse
+ * input has to be scaled back the other way before it reaches the
+ * controller - see getScale() and BoardInputListener.
+ *
+ * The scale computed in the constructor is only a first guess, made before
+ * any native window exists: it estimates window-chrome size via
+ * SCREEN_CHROME_MARGIN_PX because a title bar's real height (which varies
+ * by OS, theme, and DPI scaling) isn't knowable yet. Implementing
+ * ScreenFittable lets GameWindow correct that guess with the real numbers
+ * once its frame actually exists - see GameWindow's class doc.
  */
-public class BoardView extends JPanel {
+public class BoardView extends JPanel implements ScreenFittable {
 
     private static final String BOARD_IMAGE_ASSET = "assets/board.png";
 
@@ -55,48 +79,121 @@ public class BoardView extends JPanel {
 
     // Cool blue-gray tint drawn under a resting piece, distinct from the
     // rejection flash's red so the two aren't confused for one another.
-    private static final Color RESTING_TINT = new Color(40, 60, 120, 90);
+    private static final Color RESTING_TINT = new Color(243, 208, 31, 116);
+
+    // Reserves room around the scaled board for the window's title bar and
+    // the OS taskbar/dock when computing how large the board can be drawn
+    // without exceeding the screen - see computeDisplayScale.
+    private static final int SCREEN_CHROME_MARGIN_PX = 96;
 
     private final Board board;
     private final EnginePort engine;
     private final GameController gameController;
     private final BufferedImage boardImage;
     private final PieceSprites pieceSprites = new PieceSprites();
+    private final int logicalWidth;
+    private final int logicalHeight;
+
+    // Not final: constrainToContentArea (called by GameWindow once the real
+    // frame insets are known) may shrink this further after construction -
+    // see the class doc and ScreenFittable.
+    private double scale;
 
     public BoardView(Board board, EnginePort engine, GameController gameController) {
         this.board = board;
         this.engine = engine;
         this.gameController = gameController;
 
-        int pixelWidth = board.getWidth() * Board.CELL_SIZE;
-        int pixelHeight = board.getHeight() * Board.CELL_SIZE;
+        this.logicalWidth = board.getWidth() * Board.CELL_SIZE;
+        this.logicalHeight = board.getHeight() * Board.CELL_SIZE;
+        this.scale = computeDisplayScale(logicalWidth, logicalHeight);
 
-        // Loaded at native size (no resize yet) so BoardImageCropper can
-        // find and strip off any decorative border/frame baked into the
-        // asset BEFORE the checkerboard itself gets stretched to fill the
-        // grid - see BoardImageCropper's class doc for why that order
-        // matters. What's left after cropping is stretched to exactly fill
-        // the logical grid (aspect NOT preserved). InteractionHandler
-        // already derives row/col from raw pixels as x / Board.CELL_SIZE,
-        // y / Board.CELL_SIZE - if the board image were letterboxed to
-        // preserve its own aspect ratio instead, the picture the player
-        // sees would be offset from the square math the engine uses, and
-        // clicks would land on the wrong square.
+        // The board asset is assumed to be the checkerboard itself, edge to
+        // edge, with no decorative border baked in - it's stretched to
+        // exactly fill the LOGICAL grid (aspect NOT preserved) - display
+        // scaling (if any) is applied uniformly afterward in
+        // paintComponent, so it never distorts this stretch.
+        // InteractionHandler already derives row/col from raw pixels as
+        // x / Board.CELL_SIZE, y / Board.CELL_SIZE - if the board image were
+        // letterboxed to preserve its own aspect ratio instead, the picture
+        // the player sees would be offset from the square math the engine
+        // uses, and clicks would land on the wrong square.
         BufferedImage rawBoard = new Img().read(AssetPaths.resolve(BOARD_IMAGE_ASSET).getPath()).get();
-        BufferedImage checkerboardOnly = BoardImageCropper.cropToCheckerboard(rawBoard);
-        this.boardImage = scaleTo(checkerboardOnly, pixelWidth, pixelHeight);
+        this.boardImage = scaleTo(rawBoard, logicalWidth, logicalHeight);
 
-        setPreferredSize(new Dimension(pixelWidth, pixelHeight));
+        setPreferredSize(new Dimension(
+                (int) Math.round(logicalWidth * scale),
+                (int) Math.round(logicalHeight * scale)));
         setOpaque(true);
+    }
+
+    /**
+     * How much smaller than logical size the board must be drawn to fit the
+     * current display's usable work area (screen minus taskbar/dock), 1.0
+     * meaning no scaling is needed. Never scales UP past 1.0 - a board that
+     * already fits is drawn at its native, crispest resolution.
+     */
+    private static double computeDisplayScale(int logicalWidth, int logicalHeight) {
+        try {
+            Rectangle screenBounds = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+            double scaleX = screenBounds.width / (double) logicalWidth;
+            double scaleY = (screenBounds.height - SCREEN_CHROME_MARGIN_PX) / (double) logicalHeight;
+            return Math.min(1.0, Math.min(scaleX, scaleY));
+        } catch (HeadlessException e) {
+            // No display to measure against (e.g. running under a headless
+            // test harness) - fall back to native size.
+            return 1.0;
+        }
+    }
+
+    /**
+     * How much the on-screen board is shrunk relative to logical pixel
+     * space. BoardInputListener divides raw mouse coordinates by this
+     * before handing them to the controller, so a click still lands on the
+     * same logical square regardless of display scaling.
+     */
+    public double getScale() {
+        return scale;
+    }
+
+    /**
+     * Called by GameWindow after its first pack(), once the frame's real
+     * insets (actual title bar height, borders) and the screen's real work
+     * area are both known. If the constructor's chrome-margin guess left
+     * the board still too big for the real available space, this shrinks
+     * scale further and updates the preferred size accordingly; GameWindow
+     * then packs a second time against the corrected size. Never grows
+     * scale past what the constructor already picked - only tightens it.
+     */
+    @Override
+    public void constrainToContentArea(int maxWidth, int maxHeight) {
+        double fitScale = Math.min(
+                maxWidth / (double) logicalWidth,
+                maxHeight / (double) logicalHeight);
+        double newScale = Math.min(scale, fitScale);
+        if (newScale >= scale) return;
+
+        scale = newScale;
+        setPreferredSize(new Dimension(
+                (int) Math.round(logicalWidth * scale),
+                (int) Math.round(logicalHeight * scale)));
     }
 
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        g.drawImage(boardImage, 0, 0, null);
-        paintPieces((Graphics2D) g);
-        paintRejectionFeedback((Graphics2D) g);
-        paintGameOverCaption((Graphics2D) g);
+        Graphics2D g2 = (Graphics2D) g;
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        // Everything below this point draws in LOGICAL pixel coordinates;
+        // this single transform is what makes the final on-screen result
+        // fit the display. See the class doc.
+        g2.scale(scale, scale);
+
+        g2.drawImage(boardImage, 0, 0, null);
+        paintPieces(g2);
+        paintRejectionFeedback(g2);
+        paintGameOverCaption(g2);
     }
 
     /**
@@ -139,8 +236,12 @@ public class BoardView extends JPanel {
     private void paintGameOverCaption(Graphics2D g) {
         if (!engine.isGameOver()) return;
 
-        int width = getWidth();
-        int height = getHeight();
+        // Logical dimensions, not getWidth()/getHeight() - this method draws
+        // through the g2.scale(scale, scale) transform already applied in
+        // paintComponent, so using the panel's actual (post-scale) on-screen
+        // size here would shrink the overlay by scale a second time.
+        int width = logicalWidth;
+        int height = logicalHeight;
 
         g.setColor(new Color(0, 0, 0, 160));
         g.fillRect(0, 0, width, height);
@@ -182,6 +283,8 @@ public class BoardView extends JPanel {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
+        long now = engine.getGameTimeMillis();
+
         // The model's grid array is NOT updated while a (non-jump) move is in
         // flight - MovementEngine only writes the source/destination squares
         // once the move actually completes (see MovementEngine.
@@ -192,9 +295,17 @@ public class BoardView extends JPanel {
         // move resolves. Squares that are the source of an in-flight move are
         // skipped in the resting-piece pass below and drawn separately,
         // interpolated along their path, further down.
+        //
+        // A jump, by contrast, has from == to (see InteractionHandler.
+        // handleJump) - the piece never leaves its square - so it IS drawn in
+        // the pass below, just with the JUMP animation state instead of
+        // IDLE/rest, for as long as the jump remains in flight.
         Set<Position> travelingFrom = new HashSet<>();
+        Map<Position, ActiveMove> jumpingAt = new HashMap<>();
         for (ActiveMove move : engine.getActiveMoves()) {
-            if (!move.isJump()) {
+            if (move.isJump()) {
+                jumpingAt.put(move.getFrom(), move);
+            } else {
                 travelingFrom.add(move.getFrom());
             }
         }
@@ -210,25 +321,63 @@ public class BoardView extends JPanel {
                 int cellX = col * Board.CELL_SIZE;
                 int cellY = row * Board.CELL_SIZE;
 
-                // A piece that just finished a move/jump can't start a new
-                // move until it stops resting (see EnginePort.isPieceResting /
-                // REST_AFTER_MOVE_MS / REST_AFTER_JUMP_MS) - tint its square so
-                // that cooldown is actually visible, not just enforced.
-                if (engine.isPieceResting(pos)) {
-                    g.setColor(RESTING_TINT);
-                    g.fillRect(cellX, cellY, Board.CELL_SIZE, Board.CELL_SIZE);
+                boolean resting = engine.isPieceResting(pos);
+                long restDuration = resting ? engine.getRestingDurationMillis(pos) : -1;
+                long restUntil = resting ? engine.getRestingUntilMillis(pos) : -1;
+
+                // A piece that just finished a move/jump can't start a new move
+                // until it stops resting (see EnginePort.isPieceResting /
+                // REST_AFTER_MOVE_MS / REST_AFTER_JUMP_MS). Rather than a flat
+                // tint for the whole cooldown, the tint's height counts down
+                // with the remaining time - like a draining level, top edge
+                // sinking toward the bottom of the cell - so the moment the
+                // piece becomes movable again (tint fully drained) is visible
+                // at a glance instead of the cooldown being an invisible timer.
+                if (resting && restDuration > 0) {
+                    long remaining = restUntil - now;
+                    double remainingFraction = Math.max(0.0, Math.min(1.0, remaining / (double) restDuration));
+                    int tintHeight = (int) Math.round(Board.CELL_SIZE * remainingFraction);
+                    if (tintHeight > 0) {
+                        Object previousAntialiasHint = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+                        // Antialiasing softens a flat rectangle's edges under the
+                        // display-scale transform, which reads as the tint not
+                        // lining up exactly with the checker square underneath -
+                        // drawn crisp instead so its edges land exactly on the
+                        // same pixels the square itself occupies.
+                        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+                        g.setColor(RESTING_TINT);
+                        g.fillRect(cellX, cellY + (Board.CELL_SIZE - tintHeight), Board.CELL_SIZE, tintHeight);
+                        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, previousAntialiasHint);
+                    }
                 }
 
-                BufferedImage sprite = pieceSprites.get(piece.getColor(), piece.getType());
-                paintSpriteCentered(g, sprite, cellX, cellY);
+                PieceSprites.State state;
+                long elapsed;
+                ActiveMove jump = jumpingAt.get(pos);
+                if (jump != null) {
+                    state = PieceSprites.State.JUMP;
+                    long jumpStart = jump.getArrivalTimeMillis() - EnginePort.JUMP_DURATION;
+                    elapsed = now - jumpStart;
+                } else if (resting) {
+                    state = (restDuration == EnginePort.REST_AFTER_JUMP_MS)
+                            ? PieceSprites.State.SHORT_REST
+                            : PieceSprites.State.LONG_REST;
+                    elapsed = now - (restUntil - restDuration);
+                } else {
+                    state = PieceSprites.State.IDLE;
+                    elapsed = now;
+                }
+
+                BufferedImage sprite = pieceSprites.get(piece.getColor(), piece.getType(), state, elapsed);
+                if (sprite != null) {
+                    paintSpriteCentered(g, sprite, cellX, cellY);
+                }
             }
         }
 
-        long now = engine.getGameTimeMillis();
         for (ActiveMove move : engine.getActiveMoves()) {
-            // Jumps have from == to (see InteractionHandler.handleJump) - the
-            // piece never leaves its square, so it needs no interpolation and
-            // was already drawn as a normal resting piece above.
+            // Jumps never leave their square - already drawn with the JUMP
+            // state in the pass above, so they need no travel interpolation.
             if (move.isJump()) continue;
 
             double progress = travelProgress(move, now);
@@ -241,8 +390,14 @@ public class BoardView extends JPanel {
             int cellX = fromX + (int) Math.round((toX - fromX) * progress);
             int cellY = fromY + (int) Math.round((toY - fromY) * progress);
 
-            BufferedImage sprite = pieceSprites.get(move.getPiece().getColor(), move.getPiece().getType());
-            paintSpriteCentered(g, sprite, cellX, cellY);
+            int distance = chebyshevDistance(move.getFrom(), move.getTo());
+            long moveStart = move.getArrivalTimeMillis() - (distance * EnginePort.MOVE_DURATION_PER_SQUARE);
+            long elapsed = now - moveStart;
+
+            BufferedImage sprite = pieceSprites.get(move.getPiece().getColor(), move.getPiece().getType(), PieceSprites.State.MOVE, elapsed);
+            if (sprite != null) {
+                paintSpriteCentered(g, sprite, cellX, cellY);
+            }
         }
     }
 
@@ -272,10 +427,7 @@ public class BoardView extends JPanel {
 
     /**
      * Scales an already-loaded image to an exact target size, matching the
-     * bilinear quality Img.read's own resize path uses. Needed here (rather
-     * than just passing a target Dimension straight to Img.read, as before)
-     * because BoardImageCropper has to run on the raw, native-size image
-     * BEFORE any resize happens.
+     * bilinear quality Img.read's own resize path uses.
      */
     private static BufferedImage scaleTo(BufferedImage src, int width, int height) {
         BufferedImage dst = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);

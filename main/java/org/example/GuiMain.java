@@ -9,6 +9,7 @@ import org.example.rules.MoveValidationService;
 import org.example.view.BoardInputListener;
 import org.example.view.BoardView;
 import org.example.view.GameLoop;
+import org.example.view.GamePanel;
 import org.example.view.GameWindow;
 
 import java.util.Arrays;
@@ -53,11 +54,16 @@ public class GuiMain {
         GameController gameController = new GameController(movementEngine, interactionHandler);
 
         BoardView boardView = new BoardView(board, movementEngine, gameController);
-        boardView.addMouseListener(new BoardInputListener(gameController, boardView::repaint));
+        boardView.addMouseListener(new BoardInputListener(gameController, boardView::getScale, boardView::repaint));
 
-        GameWindow window = new GameWindow("Kung Fu Chess", boardView);
+        GamePanel gamePanel = new GamePanel(boardView, movementEngine, gameController);
+
+        GameWindow window = new GameWindow("Kung Fu Chess", gamePanel);
         window.show();
 
-        new GameLoop(gameController, boardView::repaint).start();
+        new GameLoop(gameController, () -> {
+            boardView.repaint();
+            gamePanel.refresh();
+        }).start();
     }
 }

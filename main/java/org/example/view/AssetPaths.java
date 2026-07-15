@@ -47,4 +47,27 @@ final class AssetPaths {
                 "Make sure the project's assets/ directory is present and the " +
                 "application is run from within the project tree.");
     }
+
+    /**
+     * Same upward search as resolve(), but for a directory, and returns null
+     * instead of throwing when nothing is found. Used for per-state sprite
+     * folders (assets/pieces/&lt;TypeColor&gt;/states/&lt;state&gt;/sprites/),
+     * where a missing or empty folder is an expected, recoverable case (that
+     * animation state simply has no frames yet) rather than a fatal
+     * misconfiguration - unlike the board image or a legacy single-file
+     * sprite, which resolve() correctly treats as required.
+     */
+    static File resolveDirOrNull(String relativePath) {
+        File dir = new File(".").getAbsoluteFile();
+
+        for (int depth = 0; depth < 5 && dir != null; depth++) {
+            File candidate = new File(dir, relativePath);
+            if (candidate.isDirectory()) {
+                return candidate;
+            }
+            dir = dir.getParentFile();
+        }
+
+        return null;
+    }
 }

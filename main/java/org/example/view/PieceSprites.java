@@ -6,14 +6,29 @@ import org.example.view.imglib.Img;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.EnumMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
- * View layer: loads and caches one static sprite per (color, type)
- * combination from assets/pieces/&lt;TypeColor&gt;.png (e.g. KW.png,
- * PB.png), and prepares each one for compositing onto the checkered board.
+ * View layer: loads and caches one animation-frame sequence per
+ * (color, type, state) combination from
+ * assets/pieces/&lt;TypeColor&gt;/states/&lt;state&gt;/sprites/&lt;n&gt;.png
+ * (e.g. assets/pieces/KW/states/move/sprites/1.png), and prepares each frame
+ * for compositing onto the checkered board.
+ *
+ * State names (idle/move/jump/short_rest/long_rest - see the State enum)
+ * mirror EnginePort's own move/jump/rest model 1:1 (MovementEngine already
+ * distinguishes REST_AFTER_MOVE_MS -> long_rest from REST_AFTER_JUMP_MS ->
+ * short_rest - see its markResting call sites), so BoardView can derive
+ * which state to render straight from engine queries, with no separate
+ * view-side state machine.
  *
  * Sprites are expected to normally be well-formed, pre-cut RGBA PNGs (a
  * real alpha channel already separating the piece from its background) -
@@ -45,10 +60,42 @@ import java.util.Map;
  * both would corrupt one (watermark-removal would treat the piece's own
  * color as "watermark" almost everywhere, and forcing full opacity on every
  * pixel would erase whatever shape the original alpha channel cut out).
+ *
+ * Missing sprites are handled gracefully rather than crashing the game: if
+ * a piece has no frames at all for the requested state, get() falls back
+ * through FALLBACK_ORDER to whatever state that piece DOES have frames for;
+ * if it has no frames in any state, get() returns null and the caller
+ * (BoardView) simply skips drawing that piece for this frame instead of
+ * throwing.
  */
 final class PieceSprites {
 
+    /** One animation state per states/&lt;folderName&gt; sprite folder. */
+    enum State {
+        IDLE("idle"), MOVE("move"), JUMP("jump"), SHORT_REST("short_rest"), LONG_REST("long_rest");
+
+        final String folderName;
+
+        State(String folderName) {
+            this.folderName = folderName;
+        }
+    }
+
     private static final String SPRITE_DIR = "assets/pieces/";
+
+    // How long each animation frame is shown before advancing to the next
+    // one, looping back to frame 0 once the sequence ends. A state with
+    // only a single sprite (common in the current asset set) is unaffected
+    // by this - it always just resolves to that one frame.
+    private static final long FRAME_DURATION_MILLIS = 120;
+
+    // If the requested state has no frames for this piece, fall back
+    // through these states in order rather than rendering nothing. IDLE
+    // first, as the calmest/most representative pose; the rest ensures a
+    // piece with frames in ANY state is still drawn as something.
+    private static final State[] FALLBACK_ORDER = {
+            State.IDLE, State.LONG_REST, State.SHORT_REST, State.MOVE, State.JUMP
+    };
 
     // A pixel counts as "background white" if every channel is within this
     // distance of 255. The legacy renders' body highlight tone
@@ -64,23 +111,78 @@ final class PieceSprites {
     // this whole path is skipped for anything with real transparency.
     private static final int WATERMARK_SATURATION_THRESHOLD = 15;
 
-    private final Map<Piece.Color, Map<Piece.Type, BufferedImage>> cache = new EnumMap<>(Piece.Color.class);
+    private final Map<Piece.Color, Map<Piece.Type, Map<State, List<BufferedImage>>>> cache = new EnumMap<>(Piece.Color.class);
 
     /**
-     * Returns the cached, cleaned-up sprite for this color/type, loading and
-     * processing it from disk on first use.
+     * Returns the animation frame to draw for this piece right now, given
+     * how long (in milliseconds) it has continuously been in {@code state}.
+     * elapsedMillis is simply divided into FRAME_DURATION_MILLIS-sized
+     * steps and wrapped to the available frame count, so the animation
+     * loops for as long as the piece remains in that state - the caller
+     * does not need to track "which frame was last shown" itself.
+     *
+     * Returns null if this piece has no frames in any state at all; the
+     * caller should skip drawing that piece for this frame rather than
+     * treat it as an error.
      */
-    BufferedImage get(Piece.Color color, Piece.Type type) {
-        return cache
-                .computeIfAbsent(color, c -> new EnumMap<>(Piece.Type.class))
-                .computeIfAbsent(type, t -> loadAndClean(color, type));
+    BufferedImage get(Piece.Color color, Piece.Type type, State state, long elapsedMillis) {
+        List<BufferedImage> frames = framesFor(color, type, state);
+
+        if (frames.isEmpty()) {
+            for (State fallback : FALLBACK_ORDER) {
+                if (fallback == state) continue;
+                frames = framesFor(color, type, fallback);
+                if (!frames.isEmpty()) break;
+            }
+        }
+
+        if (frames.isEmpty()) return null;
+
+        long safeElapsed = Math.max(0, elapsedMillis);
+        int index = (int) ((safeElapsed / FRAME_DURATION_MILLIS) % frames.size());
+        return frames.get(index);
     }
 
-    private BufferedImage loadAndClean(Piece.Color color, Piece.Type type) {
-        char colorLetter = (color == Piece.Color.WHITE) ? 'W' : 'B';
-        String fileName = SPRITE_DIR + type.getSymbol() + colorLetter + ".png";
-        File file = AssetPaths.resolve(fileName);
+    private List<BufferedImage> framesFor(Piece.Color color, Piece.Type type, State state) {
+        return cache
+                .computeIfAbsent(color, c -> new EnumMap<>(Piece.Type.class))
+                .computeIfAbsent(type, t -> new EnumMap<>(State.class))
+                .computeIfAbsent(state, s -> loadFrames(color, type, s));
+    }
 
+    private List<BufferedImage> loadFrames(Piece.Color color, Piece.Type type, State state) {
+        char colorLetter = (color == Piece.Color.WHITE) ? 'W' : 'B';
+        String statePath = SPRITE_DIR + type.getSymbol() + colorLetter + "/states/" + state.folderName + "/sprites";
+        File dir = AssetPaths.resolveDirOrNull(statePath);
+        if (dir == null) return Collections.emptyList();
+
+        File[] files = dir.listFiles((d, name) -> name.toLowerCase(Locale.ROOT).endsWith(".png"));
+        if (files == null || files.length == 0) return Collections.emptyList();
+
+        // Sort by the numeric value of the filename ("2.png" before
+        // "10.png"), not lexicographically, so frames play back in the
+        // order they were authored regardless of digit count.
+        Arrays.sort(files, Comparator.comparingInt(PieceSprites::leadingNumber));
+
+        List<BufferedImage> frames = new ArrayList<>(files.length);
+        for (File file : files) {
+            frames.add(loadAndClean(file));
+        }
+        return frames;
+    }
+
+    private static int leadingNumber(File file) {
+        String name = file.getName();
+        int dot = name.lastIndexOf('.');
+        String stem = dot >= 0 ? name.substring(0, dot) : name;
+        try {
+            return Integer.parseInt(stem);
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
+    }
+
+    private BufferedImage loadAndClean(File file) {
         BufferedImage raw = new Img().read(file.getPath()).get();
 
         if (hasRealTransparency(raw)) {
@@ -191,7 +293,7 @@ final class PieceSprites {
     }
 
     private static int[][] neighbors(int x, int y, int width, int height) {
-        java.util.List<int[]> result = new java.util.ArrayList<>(4);
+        List<int[]> result = new ArrayList<>(4);
         if (x + 1 < width) result.add(new int[]{x + 1, y});
         if (x - 1 >= 0) result.add(new int[]{x - 1, y});
         if (y + 1 < height) result.add(new int[]{x, y + 1});

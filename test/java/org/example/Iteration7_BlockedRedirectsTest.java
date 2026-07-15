@@ -203,7 +203,7 @@ public class Iteration7_BlockedRedirectsTest {
     }
 
     @Test
-    public void testOpponentMoveBlockedUntilFirstColorFinishes() {
+    public void testBothColorsCanMoveSimultaneously() {
         // Create second piece
         board.setPiece(7, 7, new Piece(Piece.Color.BLACK, Piece.Type.KING));
 
@@ -213,9 +213,9 @@ public class Iteration7_BlockedRedirectsTest {
         gc.handleClick(50, 50);
         gc.handleClick(100, 50);
 
-        // Black attempts to move while white's move is still in flight. Only one
-        // color may have an active move at a time, so this attempt is blocked at
-        // creation time - the black king never departs.
+        // Black starts moving while white's move is still in flight. Real-time
+        // chess has no turns: both colors may have a move in flight at once, so
+        // this is accepted immediately rather than blocked until white finishes.
         gc.handleClick(750, 750);
         gc.handleClick(650, 750);
 
@@ -225,16 +225,8 @@ public class Iteration7_BlockedRedirectsTest {
         assertNull(board.getPiece(new Position(0, 0)));
         assertNotNull(board.getPiece(new Position(0, 1)));
 
-        // Black's move was blocked, so the black king never moved.
-        assertNotNull("Black king's move should have been blocked while white was active", board.getPiece(new Position(7, 7)));
-        assertNull(board.getPiece(new Position(7, 6)));
-
-        // Now that white has no active move, black is free to move.
-        gc.handleClick(750, 750);
-        gc.handleClick(650, 750);
-        gc.advanceTime(1000);
-
-        assertNull(board.getPiece(new Position(7, 7)));
+        // Black's move completed too, concurrently with white's.
+        assertNull("Black king should have moved concurrently with white", board.getPiece(new Position(7, 7)));
         assertNotNull(board.getPiece(new Position(7, 6)));
     }
 
