@@ -34,19 +34,14 @@ public final class ImgRenderer implements Renderer {
 
     private static final String BOARD_IMAGE_ASSET = "assets/board.png";
 
-    // Leaves a margin around each piece sprite inside its cell so pieces
-    // don't visually collide with their square's border. Kept small (rather
-    // than 0) so pieces still read as distinct squares when adjacent, but
-    // small enough that pieces fill most of the cell.
-    private static final int PIECE_PADDING_PX = 4;
 
     // How long a rejected-move flash stays visible, fading out over this
     // window rather than disappearing abruptly.
     private static final long REJECTION_FLASH_DURATION_MS = 400;
 
-    private static final Color RESTING_TINT = new Color(243, 208, 31, 116);
-    private static final Color REJECTION_TINT_BASE = new Color(220, 30, 30);
-    private static final Color SELECTION_BORDER = new Color(255, 255, 255, 220);
+    private static final Color RESTING_TINT = new Color(248, 237, 20, 157);
+    private static final Color REJECTION_TINT_BASE = new Color(220, 30, 30, 240);
+    private static final Color SELECTION_BORDER = new Color(157, 248, 45, 221);
     private static final int SELECTION_BORDER_THICKNESS = 4;
 
     private final int cellSize;
@@ -188,7 +183,7 @@ public final class ImgRenderer implements Renderer {
         int width = snapshot.getBoardWidth() * cellSize;
         int height = snapshot.getBoardHeight() * cellSize;
 
-        canvas.fillRect(0, 0, width, height, new Color(0, 0, 0, 160));
+        canvas.fillRect(0, 0, width, height, new Color(0, 0, 0, 189));
 
         String caption = snapshot.getWinner() == null
                 ? "GAME OVER"
@@ -206,7 +201,7 @@ public final class ImgRenderer implements Renderer {
     }
 
     private void drawSpriteCentered(Img canvas, BufferedImage sprite, int cellX, int cellY) {
-        int maxSize = cellSize - 2 * PIECE_PADDING_PX;
+        int maxSize = cellSize - 2;
 
         double scale = Math.min(
                 maxSize / (double) sprite.getWidth(),
