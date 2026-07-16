@@ -5,7 +5,9 @@ import org.example.controller.MoveHistoryEntry;
 import org.example.model.Piece;
 
 import javax.swing.*;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.JTableHeader;
 import java.awt.*;
 import java.util.List;
 
@@ -26,12 +28,31 @@ import java.util.List;
  * GameEngine/EnginePort/Board directly, only GameController - and only
  * refreshes its own display from it once per GameLoop tick (see refresh(),
  * called alongside boardView.repaint() from GuiMain).
+ *
+ * Visual language: a dark "card" theme with a warm gold accent for White
+ * and a cool blue accent for Black, so each side's score bar and history
+ * panel are identifiable at a glance without relying on piece color alone
+ * (useful since the board itself is a checkerboard, not a colored panel).
  */
 public class GamePanel extends JPanel implements ScreenFittable {
 
     private static final int HISTORY_PANEL_WIDTH = 220;
-    private static final int SCORE_LABEL_HEIGHT = 34;
-    private static final Font SCORE_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 16);
+    private static final int SCORE_LABEL_HEIGHT = 40;
+
+    private static final Color BG_DARK = new Color(24, 24, 28);
+    private static final Color CARD_BG = new Color(34, 34, 40);
+    private static final Color HEADER_BG = new Color(46, 46, 54);
+    private static final Color ROW_EVEN = new Color(34, 34, 40);
+    private static final Color ROW_ODD = new Color(40, 40, 47);
+    private static final Color TEXT_PRIMARY = new Color(235, 235, 240);
+    private static final Color TEXT_MUTED = new Color(150, 150, 160);
+    private static final Color WHITE_ACCENT = new Color(230, 200, 120);
+    private static final Color BLACK_ACCENT = new Color(120, 170, 230);
+
+    private static final Font SCORE_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 17);
+    private static final Font HEADING_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 14);
+    private static final Font TABLE_FONT = new Font(Font.SANS_SERIF, Font.PLAIN, 13);
+    private static final Font HEADER_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 12);
 
     private final BoardView boardView;
     private final GameController gameController;
@@ -55,20 +76,13 @@ public class GamePanel extends JPanel implements ScreenFittable {
 
         setLayout(new BorderLayout());
         setOpaque(true);
-        setBackground(Color.DARK_GRAY);
+        setBackground(BG_DARK);
 
-        blackScoreLabel.setFont(SCORE_FONT);
-        whiteScoreLabel.setFont(SCORE_FONT);
-        blackScoreLabel.setForeground(Color.WHITE);
-        whiteScoreLabel.setForeground(Color.WHITE);
-        blackScoreLabel.setPreferredSize(new Dimension(10, SCORE_LABEL_HEIGHT));
-        whiteScoreLabel.setPreferredSize(new Dimension(10, SCORE_LABEL_HEIGHT));
-
-        add(blackScoreLabel, BorderLayout.NORTH);
-        add(whiteScoreLabel, BorderLayout.SOUTH);
+        add(scoreBar(blackScoreLabel, BLACK_ACCENT, false), BorderLayout.NORTH);
+        add(scoreBar(whiteScoreLabel, WHITE_ACCENT, true), BorderLayout.SOUTH);
         add(boardView, BorderLayout.CENTER);
-        add(historyPanel("Black", blackHistoryModel), BorderLayout.WEST);
-        add(historyPanel("White", whiteHistoryModel), BorderLayout.EAST);
+        add(historyCard("Black", blackHistoryModel, BLACK_ACCENT), BorderLayout.WEST);
+        add(historyCard("White", whiteHistoryModel, WHITE_ACCENT), BorderLayout.EAST);
     }
 
     private static DefaultTableModel newHistoryModel() {
@@ -80,21 +94,73 @@ public class GamePanel extends JPanel implements ScreenFittable {
         };
     }
 
-    private static JComponent historyPanel(String title, DefaultTableModel model) {
+    /**
+     * A full-width bar for one side's running score, with a thin accent
+     * border on the edge facing the board - so the accent color reads as
+     * "belonging" to the board between the two bars rather than just
+     * floating decoration.
+     */
+    private static JPanel scoreBar(JLabel label, Color accent, boolean accentOnTop) {
+        label.setFont(SCORE_FONT);
+        label.setForeground(TEXT_PRIMARY);
+        label.setHorizontalAlignment(SwingConstants.CENTER);
+
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setBackground(HEADER_BG);
+        bar.setPreferredSize(new Dimension(10, SCORE_LABEL_HEIGHT));
+        bar.setBorder(accentOnTop
+                ? BorderFactory.createMatteBorder(3, 0, 0, 0, accent)
+                : BorderFactory.createMatteBorder(0, 0, 3, 0, accent));
+        bar.add(label, BorderLayout.CENTER);
+        return bar;
+    }
+
+    /**
+     * One side's move-history table, wrapped in a dark card with a
+     * colored, all-caps heading and a striped/borderless table - built
+     * fresh per side (rather than shared static styling helpers) so each
+     * side's accent color can be baked into its own header/heading
+     * renderers.
+     */
+    private static JComponent historyCard(String title, DefaultTableModel model, Color accent) {
         JTable table = new JTable(model);
         table.setFillsViewportHeight(true);
         table.setRowSelectionAllowed(false);
         table.setEnabled(false);
+        table.setShowGrid(false);
+        table.setIntercellSpacing(new Dimension(0, 0));
+        table.setRowHeight(24);
+        table.setFont(TABLE_FONT);
+        table.setBackground(CARD_BG);
+        table.setForeground(TEXT_PRIMARY);
+        table.setDefaultRenderer(Object.class, new StripedCellRenderer());
+
+        JTableHeader header = table.getTableHeader();
+        header.setDefaultRenderer(new HistoryHeaderRenderer(accent));
+        header.setPreferredSize(new Dimension(10, 26));
+        header.setReorderingAllowed(false);
+        header.setResizingAllowed(false);
 
         JScrollPane scrollPane = new JScrollPane(table);
         scrollPane.setPreferredSize(new Dimension(HISTORY_PANEL_WIDTH, 10));
+        scrollPane.setBorder(BorderFactory.createEmptyBorder());
+        scrollPane.getViewport().setBackground(CARD_BG);
 
-        JPanel panel = new JPanel(new BorderLayout());
-        JLabel heading = new JLabel(title, SwingConstants.CENTER);
-        heading.setFont(SCORE_FONT);
-        panel.add(heading, BorderLayout.NORTH);
-        panel.add(scrollPane, BorderLayout.CENTER);
-        return panel;
+        JLabel heading = new JLabel(title.toUpperCase(), SwingConstants.CENTER);
+        heading.setFont(HEADING_FONT);
+        heading.setForeground(accent);
+        heading.setBorder(BorderFactory.createEmptyBorder(10, 8, 8, 8));
+
+        JPanel card = new JPanel(new BorderLayout());
+        card.setBackground(CARD_BG);
+        card.add(heading, BorderLayout.NORTH);
+        card.add(scrollPane, BorderLayout.CENTER);
+
+        JPanel outer = new JPanel(new BorderLayout());
+        outer.setBackground(BG_DARK);
+        outer.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        outer.add(card, BorderLayout.CENTER);
+        return outer;
     }
 
     /**
@@ -151,5 +217,47 @@ public class GamePanel extends JPanel implements ScreenFittable {
         boardView.constrainToContentArea(
                 Math.max(0, maxWidth - reservedWidth),
                 Math.max(0, maxHeight - reservedHeight));
+    }
+
+    /** Alternating row shading, muted "Time" column, brighter left-aligned "Move" column - a plain default JTable renderer would otherwise paint every cell the same flat white. */
+    private static final class StripedCellRenderer extends DefaultTableCellRenderer {
+        StripedCellRenderer() {
+            setOpaque(true);
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
+                                                         boolean hasFocus, int row, int column) {
+            JLabel label = (JLabel) super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            label.setBackground(row % 2 == 0 ? ROW_EVEN : ROW_ODD);
+            label.setForeground(column == 0 ? TEXT_MUTED : TEXT_PRIMARY);
+            label.setHorizontalAlignment(column == 0 ? SwingConstants.CENTER : SwingConstants.LEFT);
+            label.setBorder(BorderFactory.createEmptyBorder(0, column == 0 ? 0 : 10, 0, 6));
+            return label;
+        }
+    }
+
+    /** Table header painted in the card's dark palette with a bottom accent rule in the side's own color, instead of the default light-gray Swing header that would otherwise clash with the dark card around it. */
+    private static final class HistoryHeaderRenderer extends DefaultTableCellRenderer {
+        private final Color accent;
+
+        HistoryHeaderRenderer(Color accent) {
+            this.accent = accent;
+            setHorizontalAlignment(SwingConstants.CENTER);
+            setFont(HEADER_FONT);
+            setOpaque(true);
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected,
+                                                         boolean hasFocus, int row, int column) {
+            JLabel label = (JLabel) super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            label.setBackground(HEADER_BG);
+            label.setForeground(TEXT_PRIMARY);
+            label.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createMatteBorder(0, 0, 2, 0, accent),
+                    BorderFactory.createEmptyBorder(4, 4, 4, 4)));
+            return label;
+        }
     }
 }

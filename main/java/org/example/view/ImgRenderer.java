@@ -4,6 +4,7 @@ import org.example.engine.EnginePort;
 import org.example.engine.GameSnapshot;
 import org.example.engine.PieceSnapshot;
 import org.example.engine.VisualState;
+import org.example.model.Piece;
 import org.example.model.Position;
 import org.example.view.imglib.Img;
 
@@ -43,6 +44,17 @@ public final class ImgRenderer implements Renderer {
     private static final Color REJECTION_TINT_BASE = new Color(220, 30, 30, 240);
     private static final Color SELECTION_BORDER = new Color(157, 248, 45, 221);
     private static final int SELECTION_BORDER_THICKNESS = 4;
+
+    // Game-over caption palette - shares the warm-gold/cool-blue accent
+    // language GamePanel uses for White/Black's score bar and history
+    // panel, so the same "which side is this" visual cue reads correctly
+    // even inside the rendered board image itself.
+    private static final Color GAME_OVER_PANEL_BG = new Color(18, 18, 22, 235);
+    private static final Color GAME_OVER_BORDER = new Color(198, 161, 91);
+    private static final Color GAME_OVER_TITLE = new Color(240, 240, 245);
+    private static final Color WHITE_WIN_ACCENT = new Color(230, 200, 120);
+    private static final Color BLACK_WIN_ACCENT = new Color(120, 170, 230);
+    private static final Color DRAW_ACCENT = new Color(205, 205, 210);
 
     private final int cellSize;
     private final PieceSprites pieceSprites = new PieceSprites();
@@ -176,6 +188,14 @@ public final class ImgRenderer implements Renderer {
      * won explicitly at the moment a king is actually captured (see
      * MovementEngine/DefaultGameEngine) - this method never inspects piece
      * positions to guess.
+     *
+     * Rendered as a bordered card (not bare text over the dimmed board) so
+     * it reads as a deliberate UI element: a bold "GAME OVER" title over a
+     * smaller "<COLOR> WINS" subtitle in that side's own accent color
+     * (or a neutral "DRAW" if there's no winner). Both lines are centered
+     * using Img.textWidth's exact measurement rather than the old
+     * characters-times-average-width guess, so the card is never
+     * lopsided.
      */
     private void drawGameOver(Img canvas, GameSnapshot snapshot) {
         if (!snapshot.isGameOver()) return;
@@ -185,19 +205,42 @@ public final class ImgRenderer implements Renderer {
 
         canvas.fillRect(0, 0, width, height, new Color(0, 0, 0, 189));
 
-        String caption = snapshot.getWinner() == null
-                ? "GAME OVER"
-                : "GAME OVER — " + snapshot.getWinner().name() + " WINS";
+        String title = "GAME OVER";
+        boolean draw = snapshot.getWinner() == null;
+        String subtitle = draw ? "DRAW" : snapshot.getWinner().name() + " WINS";
+        Color subtitleColor = draw
+                ? DRAW_ACCENT
+                : (snapshot.getWinner() == Piece.Color.WHITE ? WHITE_WIN_ACCENT : BLACK_WIN_ACCENT);
 
-        // Img.putText has no font-metrics query of its own, so centering
-        // here is an approximation based on an average character width for
-        // the font size used, rather than exact measurement.
-        int approxCharWidthPx = 20;
-        int textX = Math.max(0, (width - caption.length() * approxCharWidthPx) / 2);
-        int textY = height / 2;
+        float titleSize = 4.0f;
+        float subtitleSize = 2.4f;
 
-        canvas.putText(caption, textX + 2, textY + 2, 3.5f, Color.BLACK, 1);
-        canvas.putText(caption, textX, textY, 3.5f, Color.WHITE, 1);
+        int titleWidth = canvas.textWidth(title, titleSize, true);
+        int subtitleWidth = canvas.textWidth(subtitle, subtitleSize, true);
+        int contentWidth = Math.max(titleWidth, subtitleWidth);
+
+        int paddingX = 50;
+        int paddingY = 32;
+        int lineGap = 16;
+        int titleHeight = Math.round(titleSize * 12);
+        int subtitleHeight = Math.round(subtitleSize * 12);
+
+        int panelWidth = Math.min(width - 24, contentWidth + paddingX * 2);
+        int panelHeight = titleHeight + subtitleHeight + lineGap + paddingY * 2;
+        int panelX = (width - panelWidth) / 2;
+        int panelY = (height - panelHeight) / 2;
+
+        canvas.fillRoundRect(panelX, panelY, panelWidth, panelHeight, 26, 26, GAME_OVER_PANEL_BG);
+        canvas.drawRoundRect(panelX, panelY, panelWidth, panelHeight, 26, 26, GAME_OVER_BORDER, 3);
+
+        int titleY = panelY + paddingY + titleHeight - 8;
+        int titleX = panelX + (panelWidth - titleWidth) / 2;
+        canvas.putText(title, titleX + 2, titleY + 2, titleSize, new Color(0, 0, 0, 140), true);
+        canvas.putText(title, titleX, titleY, titleSize, GAME_OVER_TITLE, true);
+
+        int subtitleY = titleY + lineGap + subtitleHeight - 6;
+        int subtitleX = panelX + (panelWidth - subtitleWidth) / 2;
+        canvas.putText(subtitle, subtitleX, subtitleY, subtitleSize, subtitleColor, true);
     }
 
     private void drawSpriteCentered(Img canvas, BufferedImage sprite, int cellX, int cellY) {

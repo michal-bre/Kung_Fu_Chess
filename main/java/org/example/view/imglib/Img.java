@@ -138,6 +138,62 @@ public class Img {
         g.dispose();
     }
 
+    /* ----------- additive extensions below: bold text, size measurement,
+     * and rounded rectangles - purely additive, no existing method's
+     * behavior is touched. Added so callers (e.g. ImgRenderer's game-over
+     * caption) can draw a proper bold title/panel without needing a
+     * third-party UI library, per the design brief. ----------- */
+
+    /** Same as putText, but lets the caller ask for a bold weight. */
+    public void putText(String txt, int x, int y, float fontSize, Color color, boolean bold) {
+        if (img == null) throw new IllegalStateException("Image not loaded.");
+
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                           RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setColor(color);
+        Font base = img.getGraphics().getFont();
+        g.setFont(bold ? base.deriveFont(Font.BOLD, fontSize * 12) : base.deriveFont(fontSize * 12));
+        g.drawString(txt, x, y);
+        g.dispose();
+    }
+
+    /** Pixel width putText(txt, ..., fontSize, ...) would render {@code txt} at - lets a caller center text exactly instead of guessing from character count. */
+    public int textWidth(String txt, float fontSize, boolean bold) {
+        if (img == null) throw new IllegalStateException("Image not loaded.");
+
+        Graphics2D g = img.createGraphics();
+        Font base = img.getGraphics().getFont();
+        Font font = bold ? base.deriveFont(Font.BOLD, fontSize * 12) : base.deriveFont(fontSize * 12);
+        int width = g.getFontMetrics(font).stringWidth(txt);
+        g.dispose();
+        return width;
+    }
+
+    /** Draws a flat, optionally translucent rounded rectangle - the fillRect above's rounded-corner counterpart. */
+    public void fillRoundRect(int x, int y, int width, int height, int arcWidth, int arcHeight, Color color) {
+        if (img == null) throw new IllegalStateException("Image not loaded.");
+
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(color);
+        g.fillRoundRect(x, y, width, height, arcWidth, arcHeight);
+        g.dispose();
+    }
+
+    /** Strokes a rounded rectangle outline, centered on the given bounds. */
+    public void drawRoundRect(int x, int y, int width, int height, int arcWidth, int arcHeight, Color color, int strokeWidth) {
+        if (img == null) throw new IllegalStateException("Image not loaded.");
+
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(color);
+        g.setStroke(new BasicStroke(strokeWidth));
+        int inset = strokeWidth / 2;
+        g.drawRoundRect(x + inset, y + inset, width - strokeWidth, height - strokeWidth, arcWidth, arcHeight);
+        g.dispose();
+    }
+
     /* ----------- display in a Swing window ----------- */
     public void show() {
         if (img == null) throw new IllegalStateException("Image not loaded.");
