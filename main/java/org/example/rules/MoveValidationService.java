@@ -6,19 +6,19 @@ import org.example.model.Position;
 
 /**
  * Rules layer: pure move-legality logic.
- *
+
  * Depends ONLY on the model (Board, Piece, Position) plus its own
  * ActiveMoveQuery port. It has zero knowledge of:
  * - How moves are scheduled or how time works (that's the engine layer)
  * - How the UI receives or displays commands (that's the adapters layer)
  * - Any concrete engine implementation
- *
+
  * Because the only "engine" capability this service needs is a yes/no
  * occupancy check, that need is expressed as the rules-owned ActiveMoveQuery
  * interface (see that file for the Dependency Inversion rationale). This is
  * what makes it possible to unit test move validation with a trivial fake
  * ActiveMoveQuery, without ever constructing a MovementEngine.
- *
+
  * Note: this class deliberately has NO knowledge of pawn promotion. Move
  * legality and promotion are two separate concerns - whether a move is legal
  * never depends on what happens to the piece after it lands, so this class

@@ -1,5 +1,8 @@
 package org.example.controller;
 
+import org.example.bus.EventBus;
+import org.example.bus.JumpPerformedEvent;
+import org.example.bus.MoveLoggedEvent;
 import org.example.engine.GameEngine;
 import org.example.engine.JumpResult;
 import org.example.engine.MoveResult;
@@ -32,6 +35,7 @@ public class InteractionHandler {
     private final Board board;
     private final GameEngine gameEngine;
     private final BoardMapper boardMapper;
+    private final EventBus bus;
     private Position selectedPosition;
     // The exact Piece object present at selectedPosition at the moment it was
     // selected. Piece has no value-based equals()/hashCode(), so this is a
@@ -60,10 +64,16 @@ public class InteractionHandler {
     // move log, and a jump has no chess-notation equivalent.
     private final List<MoveHistoryEntry> moveHistory = new ArrayList<>();
 
+    /** Local-mode convenience constructor: wires up a private EventBus that nothing outside this instance can observe. Production wiring (GuiMain) uses the four-arg constructor with a shared bus instead. */
     public InteractionHandler(Board board, GameEngine gameEngine, BoardMapper boardMapper) {
+        this(board, gameEngine, boardMapper, new EventBus());
+    }
+
+    public InteractionHandler(Board board, GameEngine gameEngine, BoardMapper boardMapper, EventBus bus) {
         this.board = board;
         this.gameEngine = gameEngine;
         this.boardMapper = boardMapper;
+        this.bus = bus;
         this.selectedPosition = null;
         this.selectedPiece = null;
     }
@@ -149,10 +159,12 @@ public class InteractionHandler {
 
             MoveResult result = gameEngine.requestMove(selectedPosition, clickedPos);
             if (result.isAccepted()) {
-                moveHistory.add(new MoveHistoryEntry(
+                MoveHistoryEntry entry = new MoveHistoryEntry(
                         movingPiece.getColor(),
                         gameEngine.getGameTimeMillis(),
-                        formatNotation(movingPiece, from, clickedPos, isCapture)));
+                        formatNotation(movingPiece, from, clickedPos, isCapture));
+                moveHistory.add(entry);
+                bus.publish(new MoveLoggedEvent(entry, isCapture));
             } else {
                 lastRejectedPosition = clickedPos;
                 lastRejectedAtMillis = gameEngine.getGameTimeMillis();
@@ -169,7 +181,17 @@ public class InteractionHandler {
         if (!mapped.isPresent()) return;
         Position pos = mapped.get();
 
+        // Read who's jumping BEFORE requestJump runs - a successful jump
+        // never relocates its piece (from == to), so this would be safe to
+        // read after too, but reading it first also stays correct if that
+        // ever changes, and costs nothing either way.
+        Piece jumpingPiece = gameEngine.pieceAt(pos).orElse(null);
+
         JumpResult result = gameEngine.requestJump(pos);
+
+        if (result.isAccepted() && jumpingPiece != null) {
+            bus.publish(new JumpPerformedEvent(jumpingPiece.getColor()));
+        }
 
         // Selection is only cleared when the jump actually DID something -
         // either it succeeded, or it came too late and the enemy's attack

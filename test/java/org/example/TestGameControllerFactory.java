@@ -1,5 +1,6 @@
 package org.example;
 
+import org.example.bus.EventBus;
 import org.example.controller.BoardMapper;
 import org.example.controller.GameController;
 import org.example.controller.InteractionHandler;
@@ -37,6 +38,16 @@ public final class TestGameControllerFactory {
         GameEngine gameEngine = new DefaultGameEngine(board, movementEngine, moveValidationService, Board.CELL_SIZE);
         BoardMapper boardMapper = new BoardMapper(Board.CELL_SIZE, board.getHeight(), board.getWidth());
         InteractionHandler interactionHandler = new InteractionHandler(board, gameEngine, boardMapper);
+        return new GameController(gameEngine, interactionHandler);
+    }
+
+    /** Same wiring as create(Board), but with a caller-supplied EventBus instead of each layer's private default one - lets a test subscribe and observe exactly what the real composition root (GuiMain) would publish. */
+    public static GameController create(Board board, EventBus bus) {
+        MovementEngine movementEngine = new MovementEngine(board, bus);
+        MoveValidationService moveValidationService = new MoveValidationService(board, movementEngine);
+        GameEngine gameEngine = new DefaultGameEngine(board, movementEngine, moveValidationService, Board.CELL_SIZE);
+        BoardMapper boardMapper = new BoardMapper(Board.CELL_SIZE, board.getHeight(), board.getWidth());
+        InteractionHandler interactionHandler = new InteractionHandler(board, gameEngine, boardMapper, bus);
         return new GameController(gameEngine, interactionHandler);
     }
 }

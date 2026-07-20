@@ -1,5 +1,8 @@
 package org.example.view;
 
+import org.example.bus.EventBus;
+import org.example.bus.MoveLoggedEvent;
+import org.example.bus.ScoreUpdatedEvent;
 import org.example.controller.GameController;
 import org.example.controller.MoveHistoryEntry;
 import org.example.model.Piece;
@@ -9,7 +12,6 @@ import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.JTableHeader;
 import java.awt.*;
-import java.util.List;
 
 /**
  * View layer: top-level composite that arranges the board together with a
@@ -23,11 +25,12 @@ import java.util.List;
  * has to know about the other's internals.
  *
  * Score and move history are both purely derived, read-only views over
- * GameController state (GameController.getScore, GameController.
- * getMoveHistory) - this class never mutates game state, and never touches
- * GameEngine/EnginePort/Board directly, only GameController - and only
- * refreshes its own display from it once per GameLoop tick (see refresh(),
- * called alongside boardView.repaint() from GuiMain).
+ * game state - this class never mutates anything, and never touches
+ * GameEngine/EnginePort/Board directly. Rather than poll GameController
+ * every GameLoop tick (the old refresh() shape), this class subscribes
+ * directly to the shared EventBus's ScoreUpdatedEvent/MoveLoggedEvent and
+ * updates only the one label/row that actually changed, exactly when it
+ * changes - see the bus package for why.
  *
  * Visual language: a dark "card" theme with a warm gold accent for White
  * and a cool blue accent for Black, so each side's score bar and history
@@ -63,14 +66,12 @@ public class GamePanel extends JPanel implements ScreenFittable {
     private final DefaultTableModel blackHistoryModel = newHistoryModel();
     private final DefaultTableModel whiteHistoryModel = newHistoryModel();
 
-    // How many of GameController.getMoveHistory()'s entries (for each color)
-    // have already been appended to the corresponding table - so refresh()
-    // only ever appends new rows instead of rebuilding the table from
-    // scratch every tick.
-    private int blackHistoryRowsShown = 0;
-    private int whiteHistoryRowsShown = 0;
-
+    /** Local-mode convenience constructor: wires up a private EventBus that nothing outside this instance can observe (so score/history simply never update). Production wiring (GuiMain) uses the three-arg constructor with the shared bus instead. */
     public GamePanel(BoardView boardView, GameController gameController) {
+        this(boardView, gameController, new EventBus());
+    }
+
+    public GamePanel(BoardView boardView, GameController gameController, EventBus bus) {
         this.boardView = boardView;
         this.gameController = gameController;
 
@@ -83,6 +84,9 @@ public class GamePanel extends JPanel implements ScreenFittable {
         add(boardView, BorderLayout.CENTER);
         add(historyCard("Black", blackHistoryModel, BLACK_ACCENT), BorderLayout.WEST);
         add(historyCard("White", whiteHistoryModel, WHITE_ACCENT), BorderLayout.EAST);
+
+        bus.subscribe(ScoreUpdatedEvent.class, this::onScoreUpdated);
+        bus.subscribe(MoveLoggedEvent.class, this::onMoveLogged);
     }
 
     private static DefaultTableModel newHistoryModel() {
@@ -163,35 +167,26 @@ public class GamePanel extends JPanel implements ScreenFittable {
         return outer;
     }
 
-    /**
-     * Refreshes the score labels and appends any move-history rows created
-     * since the last call. Cheap to call every GameLoop tick: the score
-     * labels are just text updates, and history only ever grows by
-     * appending rows for moves not already shown, never rebuilding the
-     * whole table.
-     */
-    public void refresh() {
-        blackScoreLabel.setText("Black — Score: " + gameController.getScore(Piece.Color.BLACK));
-        whiteScoreLabel.setText("White — Score: " + gameController.getScore(Piece.Color.WHITE));
+    /** ScoreUpdatedEvent subscriber - updates only the one label the event is actually about. */
+    private void onScoreUpdated(ScoreUpdatedEvent event) {
+        JLabel label = event.getColor() == Piece.Color.BLACK ? blackScoreLabel : whiteScoreLabel;
+        String sideName = event.getColor() == Piece.Color.BLACK ? "Black" : "White";
+        String text = sideName + " — Score: " + event.getNewScore();
+        SwingUtilities.invokeLater(() -> label.setText(text));
+    }
 
-        List<MoveHistoryEntry> history = gameController.getMoveHistory();
-        int blackSeen = 0;
-        int whiteSeen = 0;
-        for (MoveHistoryEntry entry : history) {
-            if (entry.getColor() == Piece.Color.BLACK) {
-                blackSeen++;
-                if (blackSeen > blackHistoryRowsShown) {
-                    blackHistoryModel.addRow(new Object[]{formatTime(entry.getTimeMillis()), entry.getNotation()});
-                }
-            } else {
-                whiteSeen++;
-                if (whiteSeen > whiteHistoryRowsShown) {
-                    whiteHistoryModel.addRow(new Object[]{formatTime(entry.getTimeMillis()), entry.getNotation()});
-                }
-            }
-        }
-        blackHistoryRowsShown = blackSeen;
-        whiteHistoryRowsShown = whiteSeen;
+    /**
+     * MoveLoggedEvent subscriber - appends exactly one row to the correct
+     * side's table. Wrapped in invokeLater even though today's only
+     * publisher (GameLoop's Swing Timer) already runs on the EDT, so this
+     * stays correct once a networked server starts publishing from a
+     * non-EDT network thread instead.
+     */
+    private void onMoveLogged(MoveLoggedEvent event) {
+        MoveHistoryEntry entry = event.getEntry();
+        DefaultTableModel model = entry.getColor() == Piece.Color.BLACK ? blackHistoryModel : whiteHistoryModel;
+        Object[] row = {formatTime(entry.getTimeMillis()), entry.getNotation()};
+        SwingUtilities.invokeLater(() -> model.addRow(row));
     }
 
     private static String formatTime(long millis) {

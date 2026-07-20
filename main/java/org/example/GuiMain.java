@@ -1,6 +1,10 @@
 package org.example;
 
 import org.example.adapters.BoardParser;
+import org.example.audio.SoundPlayer;
+import org.example.bus.EventBus;
+import org.example.bus.GameEndedEvent;
+import org.example.bus.GameStartedEvent;
 import org.example.controller.BoardMapper;
 import org.example.controller.GameController;
 import org.example.controller.InteractionHandler;
@@ -58,11 +62,17 @@ public class GuiMain {
 
         Board board = BoardParser.parse(startingPosition);
 
-        MovementEngine movementEngine = new MovementEngine(board);
+        // Shared EventBus: every layer below (MovementEngine, InteractionHandler)
+        // publishes to it, every reactive UI/audio consumer (GamePanel,
+        // SoundPlayer, the window title) subscribes to it - see the bus
+        // package for why this replaced the old poll-every-tick refresh().
+        EventBus bus = new EventBus();
+
+        MovementEngine movementEngine = new MovementEngine(board, bus);
         MoveValidationService moveValidationService = new MoveValidationService(board, movementEngine);
         GameEngine gameEngine = new DefaultGameEngine(board, movementEngine, moveValidationService, CELL_SIZE);
         BoardMapper boardMapper = new BoardMapper(CELL_SIZE, board.getHeight(), board.getWidth());
-        InteractionHandler interactionHandler = new InteractionHandler(board, gameEngine, boardMapper);
+        InteractionHandler interactionHandler = new InteractionHandler(board, gameEngine, boardMapper, bus);
         GameController gameController = new GameController(gameEngine, interactionHandler);
 
         Renderer renderer = new ImgRenderer(CELL_SIZE);
@@ -70,14 +80,18 @@ public class GuiMain {
                 board.getWidth(), board.getHeight(), CELL_SIZE);
         boardView.addMouseListener(new BoardInputListener(gameController, boardView::getScale, boardView::repaint));
 
-        GamePanel gamePanel = new GamePanel(boardView, gameController);
+        GamePanel gamePanel = new GamePanel(boardView, gameController, bus);
 
         GameWindow window = new GameWindow("Kung Fu Chess", gamePanel);
+        bus.subscribe(GameStartedEvent.class, event -> window.setStatus("Game in progress"));
+        bus.subscribe(GameEndedEvent.class, event -> window.setStatus("GAME OVER — " + event.getWinner().name() + " WINS"));
+        new SoundPlayer(bus);
         window.show();
 
-        new GameLoop(gameController, () -> {
-            boardView.repaint();
-            gamePanel.refresh();
-        }).start();
+        // Only repaint needs to run every tick now - it's the one thing
+        // that's genuinely continuous (pieces gliding between squares).
+        // Score/history updates are event-driven (see GamePanel's bus
+        // subscriptions above) and no longer need polling at all.
+        new GameLoop(gameController, boardView::repaint).start();
     }
 }

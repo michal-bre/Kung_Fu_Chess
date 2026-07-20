@@ -31,8 +31,10 @@ import java.awt.*;
 public class GameWindow {
 
     private final JFrame frame;
+    private final String baseTitle;
 
     public GameWindow(String title, JComponent content) {
+        this.baseTitle = title;
         frame = new JFrame(title);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setResizable(false);
@@ -80,5 +82,17 @@ public class GameWindow {
 
     public void show() {
         SwingUtilities.invokeLater(() -> frame.setVisible(true));
+    }
+
+    /**
+     * Updates the title bar to reflect a transient status suffix - e.g.
+     * GuiMain wires this to GameStartedEvent/GameEndedEvent on the shared
+     * EventBus, so the window title itself reacts to game lifecycle events
+     * without this class needing to know the bus exists. Pass null or
+     * empty to restore the plain title.
+     */
+    public void setStatus(String status) {
+        SwingUtilities.invokeLater(() ->
+                frame.setTitle(status == null || status.isEmpty() ? baseTitle : baseTitle + " — " + status));
     }
 }

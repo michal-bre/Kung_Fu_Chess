@@ -5,7 +5,7 @@ import org.example.model.Position;
 
 /**
  * Rules layer: capture-on-collision mechanics.
- *
+
  * Encapsulates the one rule this game uses to decide whether two things
  * standing on (or arriving at) the same square result in a capture: same
  * destination, different color. That rule shows up in two places -
@@ -13,7 +13,7 @@ import org.example.model.Position;
  * on a square that's already (or simultaneously) occupied by an enemy
  * piece - so both are expressed here in terms of the same underlying
  * predicate, isCapture(Piece.Color, Piece.Color).
- *
+
  * This is pure logic over model values only (Position, Piece.Color) - no
  * board mutation and no knowledge of timing or how moves are tracked. The
  * engine layer (MovementEngine) is responsible for finding candidate move

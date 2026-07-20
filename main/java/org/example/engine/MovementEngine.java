@@ -1,5 +1,9 @@
 package org.example.engine;
 
+import org.example.bus.EventBus;
+import org.example.bus.GameEndedEvent;
+import org.example.bus.GameStartedEvent;
+import org.example.bus.ScoreUpdatedEvent;
 import org.example.model.Board;
 import org.example.model.Piece;
 import org.example.model.Position;
@@ -35,6 +39,7 @@ import java.util.Map;
  */
 public class MovementEngine implements EnginePort, ActiveMoveQuery {
     private final Board board;
+    private final EventBus bus;
     private final AirCaptureService airCaptureService;
     private final PawnPromotionService pawnPromotionService;
     private final List<ActiveMove> activeMoves;
@@ -54,8 +59,14 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     // MOVE_DURATION_PER_SQUARE / JUMP_DURATION / REST_AFTER_MOVE_MS /
     // REST_AFTER_JUMP_MS are inherited from EnginePort.
 
+    /** Local-mode convenience constructor: wires up a private EventBus that nothing outside this instance can observe. Production wiring (GuiMain) uses the two-arg constructor with a shared bus instead. */
     public MovementEngine(Board board) {
+        this(board, new EventBus());
+    }
+
+    public MovementEngine(Board board, EventBus bus) {
         this.board = board;
+        this.bus = bus;
         this.airCaptureService = new AirCaptureService();
         this.pawnPromotionService = new PawnPromotionService(board);
         this.activeMoves = new ArrayList<>();
@@ -67,6 +78,10 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
         this.scores.put(Piece.Color.BLACK, 0);
         this.gameTimeMillis = 0;
         this.isGameOver = false;
+        // Engine construction and "the game is now playable" are the same
+        // moment in this local-mode wiring - see GameStartedEvent's class
+        // doc for why a networked server will publish this differently.
+        this.bus.publish(new GameStartedEvent());
     }
 
     @Override
@@ -77,6 +92,7 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     @Override
     public void addScore(Piece.Color color, int points) {
         scores.merge(color, points, Integer::sum);
+        bus.publish(new ScoreUpdatedEvent(color, scores.get(color)));
     }
 
     @Override
@@ -135,6 +151,14 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
     @Override
     public void setWinner(Piece.Color winner) {
         this.winnerColor = winner;
+        // A game only ever transitions TO having a winner, never back to
+        // having none (there's no reset/draw path today - see the class
+        // doc's promotion note for the same "fires exactly once" shape) -
+        // so publishing only on a non-null winner is exactly "the game just
+        // ended", not merely "this field was touched".
+        if (winner != null) {
+            bus.publish(new GameEndedEvent(winner));
+        }
     }
 
     @Override
@@ -212,8 +236,8 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                     board.setPiece(move.getFrom().getRow(), move.getFrom().getCol(), null);
                     addScore(activeJump.getPiece().getColor(), PieceScore.valueOf(move.getPiece().getType()));
                     if (move.getPiece().getType() == Piece.Type.KING) {
-                        isGameOver = true;
-                        winnerColor = activeJump.getPiece().getColor();
+                        setGameOver(true);
+                        setWinner(activeJump.getPiece().getColor());
                     }
                     toRemove.add(move);
                 }
@@ -283,8 +307,8 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                     capturedInAir = true;
                     addScore(jumpMove.getPiece().getColor(), PieceScore.valueOf(normalMove.getPiece().getType()));
                     if (normalMove.getPiece().getType() == Piece.Type.KING) {
-                        isGameOver = true;
-                        winnerColor = jumpMove.getPiece().getColor();
+                        setGameOver(true);
+                        setWinner(jumpMove.getPiece().getColor());
                     }
                     break;
                 }
@@ -360,8 +384,8 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
             ActiveMove winner = contenders.get(0);
             for (ActiveMove loser : contenders.subList(1, contenders.size())) {
                 if (loser.getPiece().getType() == Piece.Type.KING) {
-                    isGameOver = true;
-                    winnerColor = winner.getPiece().getColor();
+                    setGameOver(true);
+                    setWinner(winner.getPiece().getColor());
                 }
                 addScore(winner.getPiece().getColor(), PieceScore.valueOf(loser.getPiece().getType()));
             }
@@ -374,8 +398,8 @@ public class MovementEngine implements EnginePort, ActiveMoveQuery {
                     continue;
                 }
                 if (existingOccupant.getType() == Piece.Type.KING) {
-                    isGameOver = true;
-                    winnerColor = winner.getPiece().getColor();
+                    setGameOver(true);
+                    setWinner(winner.getPiece().getColor());
                 }
                 addScore(winner.getPiece().getColor(), PieceScore.valueOf(existingOccupant.getType()));
             }
