@@ -1,6 +1,6 @@
 package org.example.view;
 
-import org.example.controller.GameController;
+import org.example.controller.InputReceiver;
 
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -14,11 +14,13 @@ import static javax.swing.SwingUtilities.isRightMouseButton;
  * selection, a newly created move, a resolved jump) is visible immediately
  * instead of waiting for the next animation tick.
  *
- * Left-click maps to GameController.handleClick (select a piece / attempt a
+ * Left-click maps to InputReceiver.handleClick (select a piece / attempt a
  * move onto the clicked square) and right-click maps to
- * GameController.handleJump - the same two actions the CLI already exposes
+ * InputReceiver.handleJump - the same two actions the CLI already exposes
  * as separate CLICK/JUMP commands, now driven by mouse buttons instead of
- * typed text.
+ * typed text. Talks to an InputReceiver rather than a concrete
+ * GameController so the exact same listener works unchanged for both local
+ * hot-seat play and the networked client (see InputReceiver's class doc).
  *
  * Pixel coordinates are divided by BoardView's display scale before being
  * forwarded: BoardView renders the board in a fixed LOGICAL pixel space
@@ -41,12 +43,12 @@ import static javax.swing.SwingUtilities.isRightMouseButton;
  */
 public class BoardInputListener extends MouseAdapter {
 
-    private final GameController gameController;
+    private final InputReceiver inputReceiver;
     private final DoubleSupplier scale;
     private final Runnable onInteraction;
 
-    public BoardInputListener(GameController gameController, DoubleSupplier scale, Runnable onInteraction) {
-        this.gameController = gameController;
+    public BoardInputListener(InputReceiver inputReceiver, DoubleSupplier scale, Runnable onInteraction) {
+        this.inputReceiver = inputReceiver;
         this.scale = scale;
         this.onInteraction = onInteraction;
     }
@@ -58,9 +60,9 @@ public class BoardInputListener extends MouseAdapter {
         int logicalY = (int) Math.round(e.getY() / currentScale);
 
         if (isRightMouseButton(e)) {
-            gameController.handleJump(logicalX, logicalY);
+            inputReceiver.handleJump(logicalX, logicalY);
         } else {
-            gameController.handleClick(logicalX, logicalY);
+            inputReceiver.handleClick(logicalX, logicalY);
         }
         onInteraction.run();
     }

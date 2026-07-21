@@ -23,7 +23,7 @@ import java.util.List;
  * layer's job, driven entirely by getSnapshot() below - the view never
  * reaches past GameController into GameEngine/Board itself.
  */
-public class GameController {
+public class GameController implements InputReceiver {
     private final GameEngine gameEngine;
     private final InteractionHandler interactionHandler;
 
@@ -32,10 +32,12 @@ public class GameController {
         this.interactionHandler = interactionHandler;
     }
 
+    @Override
     public void handleClick(int x, int y) {
         interactionHandler.handleClick(x, y);
     }
 
+    @Override
     public void handleJump(int x, int y) {
         interactionHandler.handleJump(x, y);
     }

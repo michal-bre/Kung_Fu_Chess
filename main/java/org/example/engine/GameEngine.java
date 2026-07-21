@@ -80,4 +80,18 @@ public interface GameEngine {
      * instead of the renderer having to consult the controller separately.
      */
     GameSnapshot snapshot(Position selectedPosition, Position rejectedPosition, long rejectedAtMillis);
+
+    /**
+     * Ends the game immediately in favor of whichever color is NOT
+     * {@code resigningColor} - the king-capture win condition that ends
+     * every other game in this project, forced without an actual capture.
+     * Added for Phase 4's disconnect/auto-resign handling: GameServer calls
+     * this when a connected player's WebSocket drops and doesn't reconnect
+     * within the grace period (see GameServer's class doc), so a dropped
+     * connection resolves the game exactly like any other ending - through
+     * GameEndedEvent, ELO update, and all - rather than needing a special
+     * case anywhere else. A no-op if the game is already over (a resignation
+     * can't un-decide an already-decided game, and can't happen twice).
+     */
+    void resign(Piece.Color resigningColor);
 }

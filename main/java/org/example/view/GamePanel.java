@@ -71,6 +71,21 @@ public class GamePanel extends JPanel implements ScreenFittable {
         this(boardView, gameController, new EventBus());
     }
 
+    /**
+     * Networked-mode constructor: score and move history are entirely
+     * event-driven (see the class doc - this panel never reads
+     * gameController directly, only subscribes to the bus), so the
+     * networked client has nothing local to hand in as a GameController -
+     * its "engine" is the remote server, reached only through GameClient
+     * republishing server events onto this same bus. Passing null here is
+     * safe for exactly that reason: the gameController field below is kept
+     * only for a future local read if one is ever added, and today is
+     * write-only.
+     */
+    public GamePanel(BoardView boardView, EventBus bus) {
+        this(boardView, null, bus);
+    }
+
     public GamePanel(BoardView boardView, GameController gameController, EventBus bus) {
         this.boardView = boardView;
         this.gameController = gameController;

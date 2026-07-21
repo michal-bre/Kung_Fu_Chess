@@ -268,6 +268,13 @@ public final class DefaultGameEngine implements GameEngine {
                 now, engine.isGameOver(), engine.getWinner());
     }
 
+    @Override
+    public void resign(Piece.Color resigningColor) {
+        if (engine.isGameOver()) return;
+        engine.setGameOver(true);
+        engine.setWinner(resigningColor == Piece.Color.WHITE ? Piece.Color.BLACK : Piece.Color.WHITE);
+    }
+
     private static int chebyshevDistance(Position from, Position to) {
         int deltaRow = Math.abs(to.getRow() - from.getRow());
         int deltaCol = Math.abs(to.getCol() - from.getCol());
