@@ -13,13 +13,13 @@ import java.util.List;
  * Composition root for the networked server process (CTD 26 spec slides
  * 3-5).
  *
- * Unlike Phase 2/3, this class no longer builds a Board/MovementEngine/
- * GameEngine/EventBus itself - Phase 4's matchmaking needs to build a FRESH
- * one of those for every round (see GameServer.startNewRound), not just
- * once at process startup, so that responsibility moved onto GameServer
- * itself. This class now only hands GameServer a boardFactory (how to build
- * the STARTING position for any round - the one thing that's actually
- * configuration, not per-round state) plus the account repository.
+ * This class no longer builds a Board/MovementEngine/GameEngine/EventBus
+ * itself - every Room builds its own fresh set when created (see Room's
+ * constructor), since Phase 5 supports many concurrent rooms rather than one
+ * implicit table. This class only hands GameServer a boardFactory (how to
+ * build the STARTING position for any room - the one thing that's actually
+ * configuration, not per-room state), the account repository, and a
+ * server-side GameLogger for Phase 5's dual-side logging.
  *
  * Run with optional arguments: `java org.example.net.server.ServerMain [port] [dbFile]`;
  * defaults to port 8887 and kungfuchess.db in the working directory.
@@ -46,13 +46,15 @@ public final class ServerMain {
         String dbFile = args.length > 1 ? args[1] : DEFAULT_DB_FILE;
 
         AccountRepository accountRepository = openAccountRepository(dbFile);
+        org.example.net.log.GameLogger logger = org.example.net.log.GameLogger.create("server", "server");
 
-        GameServer server = new GameServer(port, ServerMain::newStartingBoard, accountRepository);
+        GameServer server = new GameServer(port, ServerMain::newStartingBoard, accountRepository,
+                GameServer.DEFAULT_RESIGN_GRACE_MILLIS, logger);
         server.start();
         server.startGameLoop();
 
         System.out.println("Kung Fu Chess server started on ws://localhost:" + port);
-        System.out.println("Log in with a username to join the matchmaking queue - the first two waiting players are matched (White = first queued, Black = second).");
+        System.out.println("Log in with a username, then create or join a room from the lobby to play (or spectate a room that's already full).");
     }
 
     /** The standard starting position, built fresh on demand - see GameServer.startNewRound, which calls this once per round (every match gets its own brand-new Board, never a reused/still-mutated one from a previous game). */

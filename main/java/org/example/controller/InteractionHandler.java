@@ -162,7 +162,7 @@ public class InteractionHandler {
                 MoveHistoryEntry entry = new MoveHistoryEntry(
                         movingPiece.getColor(),
                         gameEngine.getGameTimeMillis(),
-                        formatNotation(movingPiece, from, clickedPos, isCapture));
+                        MoveNotation.format(movingPiece, from, clickedPos, isCapture, board.getHeight()));
                 moveHistory.add(entry);
                 bus.publish(new MoveLoggedEvent(entry, isCapture));
             } else {
@@ -206,30 +206,4 @@ public class InteractionHandler {
         }
     }
 
-    /**
-     * A simplified algebraic-style move description - see MoveHistoryEntry
-     * for exactly what's (and isn't) covered.
-     */
-    private String formatNotation(Piece piece, Position from, Position to, boolean isCapture) {
-        String destination = squareName(to);
-        if (piece.getType() == Piece.Type.PAWN) {
-            return isCapture ? (fileLetter(from.getCol()) + "x" + destination) : destination;
-        }
-        return piece.getType().getSymbol() + (isCapture ? "x" : "") + destination;
-    }
-
-    private String squareName(Position pos) {
-        return "" + fileLetter(pos.getCol()) + rankNumber(pos.getRow());
-    }
-
-    private static char fileLetter(int col) {
-        return (char) ('a' + col);
-    }
-
-    private int rankNumber(int row) {
-        // Row 0 is the top of the board (the initial black back rank, i.e.
-        // chess rank 8 - see GuiMain's starting position), so rank counts
-        // down as row counts up.
-        return board.getHeight() - row;
-    }
 }

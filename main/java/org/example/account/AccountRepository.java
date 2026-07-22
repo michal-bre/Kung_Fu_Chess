@@ -11,8 +11,25 @@ package org.example.account;
  */
 public interface AccountRepository {
 
-    /** Returns the existing account for {@code username}, or creates one at EloRating.DEFAULT_RATING with zero games played if this is the first time this username has ever logged in. Usernames are the sole account key - see GameServer's class doc for why this project has no password/authentication step. */
+    /** Returns the existing account for {@code username}, or creates one at EloRating.DEFAULT_RATING with zero games played if this is the first time this username has ever logged in. Does not check a password - only {@link #authenticate} does that; this method exists for callers (tests, recordGameResult's own bootstrap) that only need the account record itself. */
     Account findOrCreateAccount(String username);
+
+    /**
+     * Verifies {@code username}/{@code password} and returns that account,
+     * creating a brand-new one at EloRating.DEFAULT_RATING (and recording
+     * this password as its own) if this is the first time this username has
+     * ever logged in - the same "create on first use" policy
+     * {@link #findOrCreateAccount} already had, just gated by a password
+     * too now (CTD 26 spec slide 5). An account that already exists but has
+     * no password on file yet (created before this method existed) adopts
+     * whatever password is given on its next login instead of permanently
+     * locking that player out - see each implementation's authenticate for
+     * exactly when that applies.
+     *
+     * @throws AuthenticationException if the account already has a password
+     *         on file and it doesn't match the one supplied here.
+     */
+    Account authenticate(String username, String password);
 
     /**
      * Records one decisive game's outcome for both participants: persists

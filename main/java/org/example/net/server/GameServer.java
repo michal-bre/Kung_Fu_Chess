@@ -2,106 +2,74 @@ package org.example.net.server;
 
 import org.example.account.Account;
 import org.example.account.AccountRepository;
-import org.example.account.EloRating;
-import org.example.bus.EventBus;
-import org.example.bus.GameEndedEvent;
-import org.example.bus.GameStartedEvent;
-import org.example.bus.MoveLoggedEvent;
-import org.example.bus.ScoreUpdatedEvent;
-import org.example.engine.DefaultGameEngine;
-import org.example.engine.GameEngine;
-import org.example.engine.GameSnapshot;
-import org.example.engine.JumpResult;
-import org.example.engine.MoveResult;
-import org.example.engine.MovementEngine;
-import org.example.engine.PieceSnapshot;
+import org.example.account.AuthenticationException;
 import org.example.model.Board;
-import org.example.model.Piece;
-import org.example.model.Position;
-import org.example.model.Square;
+import org.example.net.log.GameLogger;
 import org.example.net.protocol.Json;
 import org.example.net.protocol.Protocol;
-import org.example.rules.MoveValidationService;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
-import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 /**
- * The authoritative, server-side half of the networked game (CTD 26 spec
- * slides 3-5): a single-process WebSocket server that owns the real
- * Board/GameEngine and treats every connected client purely as an input
- * source + display sink.
+ * The multi-room lobby (CTD 26 spec slide 5): tracks every open Room, routes
+ * each connection's messages to whichever room (if any) it currently
+ * belongs to, and keeps every connected client's room list up to date.
  *
- * This is a genuine architectural shift from today's local/hot-seat mode:
- * there, the Swing client itself is authoritative (GameController talks
- * straight to a local GameEngine). Here, GameController is never
- * constructed at all - GameEngine is driven directly by this class, and
- * "what a click meant" is decided entirely on the CLIENT side (see
- * NetworkInputReceiver) and arrives here already reduced to a MOVE/JUMP
- * command naming two algebraic squares. The server is the only thing that
- * can ever actually mutate the board.
+ * Through Phase 4, GameServer WAS a single implicit table - the first two
+ * logged-in connections played, everyone else queued for that same table.
+ * Phase 5 replaces that with explicit rooms: LOGIN no longer auto-queues a
+ * connection into anything: it only authenticates (ACCOUNT_INFO). A
+ * connection then either CREATE_ROOMs a new table (becoming its White seat)
+ * or JOIN_ROOMs an existing one by id - taking the open seat if there is
+ * one, or becoming a spectator if not (see Room's class doc for what that
+ * means). Everything about actually PLAYING a game once seated - move
+ * ownership, disconnect/auto-resign, ELO on game end, the per-room broadcast
+ * loop - now lives in Room, unchanged in substance from Phase 4, just scoped
+ * to one table instead of the whole server.
  *
- * Phase 4 turned this from "the first two connections play, forever" into
- * real (if single-table) matchmaking: a connection isn't assigned a color at
- * all until it LOGINs; LOGIN enqueues it in waitingQueue, and the moment two
- * connections are waiting AND no round is currently active, tryStartMatch
- * pairs them (FIFO - first-queued is White) and starts a fresh round via
- * startNewRound, which builds an entirely new Board/MovementEngine/
- * MoveValidationService/DefaultGameEngine/EventBus rather than reusing the
- * previous round's (now-finished, now-stale) ones. Every round-ending path -
- * a real king capture, or a forced resign() below - funnels through the
- * exact same GameEndedEvent -> onGameEnded handler, which is therefore also
- * the single place a finished round's seats are freed and the next
- * matchmaking attempt is kicked off.
+ * usernameByConnection/accountByConnection stay here (not in Room) because
+ * they're connection-level facts, not room-level ones - the same connection
+ * could in principle look up its account before ever joining a room, or
+ * after leaving one. roomByConnection is the only new piece of per-connection
+ * bookkeeping this phase adds: which room (if any) a connection's MOVE/JUMP/
+ * LEAVE_ROOM messages should be routed to.
  *
- * Disconnect handling: a player who drops mid-game isn't treated as an
- * immediate loss. Their seat enters a "disconnected, on the clock" grace
- * period (see beginDisconnectGracePeriod/forceResign); if the SAME username
- * logs back in before the grace period elapses, they resume the exact seat
- * they left (tryResumeDisconnectedSeat) with the game continuing exactly
- * where it was - the board never reset, only the WebSocket reference
- * changed. If the grace period elapses first, GameEngine.resign is called
- * for the disconnected color, which ends the game exactly like a king
- * capture would (ELO update, broadcast, seats freed, matchmaking resumes).
- *
- * Concurrency: java_websocket calls onOpen/onMessage/onClose from its own
- * I/O threads; this class also runs its own tick thread (startGameLoop) and
- * a disconnect-timer thread (disconnectExecutor). engineLock is now the
- * single lock for EVERYTHING mutable here - board/gameEngine/bus
- * (round state), whiteConnection/blackConnection/waitingQueue (matchmaking
- * state), and disconnectedColor/pendingResignTask (grace-period state) -
- * not just engine access like in Phase 2/3. This is safe specifically
- * because Java's synchronized is reentrant: onGameEnded (which always runs
- * from inside a synchronized(engineLock) block - see requestMove/
- * requestJump/advanceTime/resign's call sites) itself calls tryStartMatch,
- * which calls startNewRound, both of which also synchronize on engineLock -
- * the same thread re-entering the same monitor never blocks. Using one lock
- * for both concerns, rather than two separate locks, is what makes that
- * reentrant chain safe instead of a lock-ordering hazard.
+ * Dual-side logging (this phase's other addition): every significant
+ * server-side event - connections, room lifecycle, moves, disconnects, ELO
+ * updates - goes through a single shared GameLogger (see its class doc for
+ * why "dual-side" means server and client each keep their own independent
+ * log, not that there are two loggers here).
  */
 public final class GameServer extends WebSocketServer {
 
     public static final long DEFAULT_RESIGN_GRACE_MILLIS = 30_000;
 
+    // Phase 7 "Play" quick match (CTD 26 spec slide 6): search within +-100
+    // ELO, give up (MATCH_NOT_FOUND) after 1 minute if nobody suitable shows
+    // up.
+    public static final int MATCH_ELO_RANGE = 100;
+    public static final long MATCH_SEARCH_TIMEOUT_MILLIS = 60_000;
+
     private final Supplier<Board> boardFactory;
     private final AccountRepository accountRepository;
     private final long resignGraceMillis;
-    private final Object engineLock = new Object();
+    private final long matchSearchTimeoutMillis;
+    private final GameLogger logger;
 
     private final ScheduledExecutorService disconnectExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "disconnect-grace-timer");
@@ -109,84 +77,82 @@ public final class GameServer extends WebSocketServer {
         return thread;
     });
 
-    private final Map<WebSocket, Piece.Color> colorByConnection = new ConcurrentHashMap<>();
     private final Map<WebSocket, String> usernameByConnection = new ConcurrentHashMap<>();
     private final Map<WebSocket, Account> accountByConnection = new ConcurrentHashMap<>();
-    private final Deque<WebSocket> waitingQueue = new ConcurrentLinkedDeque<>();
+    private final Map<WebSocket, Room> roomByConnection = new ConcurrentHashMap<>();
+    private final Map<String, Room> roomsById = new ConcurrentHashMap<>();
+    private final AtomicInteger roomCounter = new AtomicInteger(0);
+    private final AtomicInteger matchRoomCounter = new AtomicInteger(0);
 
-    // The current round's game state - reassigned wholesale (never mutated
-    // in place) by startNewRound, always under engineLock. Never null after
-    // construction: round 1 is built eagerly in the constructor, so every
-    // connection has something valid to read even before any player has
-    // logged in.
-    private Board board;
-    private GameEngine gameEngine;
-    private EventBus bus;
+    /** One connection currently searching for a "Play" quick match - see handleFindMatch/tryMatch. Guarded by waitingPlayersLock (a plain ArrayList, not a concurrent collection, since matching has to scan-then-remove atomically - a lock-free structure would let two searchers both "find" the same waiting entry). */
+    private static final class WaitingPlayer {
+        final WebSocket conn;
+        final int elo;
+        final ScheduledFuture<?> timeoutTask;
 
-    private WebSocket whiteConnection;
-    private WebSocket blackConnection;
+        WaitingPlayer(WebSocket conn, int elo, ScheduledFuture<?> timeoutTask) {
+            this.conn = conn;
+            this.elo = elo;
+            this.timeoutTask = timeoutTask;
+        }
+    }
 
-    // Disconnect/auto-resign grace-period state - at most one pending at a
-    // time, since there is only ever one active round on this single-table
-    // server (see the class doc; true concurrent tables are Phase 5's
-    // "rooms").
-    private Piece.Color disconnectedColor;
-    private String disconnectedUsername;
-    private ScheduledFuture<?> pendingResignTask;
+    private final Object waitingPlayersLock = new Object();
+    private final List<WaitingPlayer> waitingPlayers = new ArrayList<>();
 
     public GameServer(int port, Supplier<Board> boardFactory, AccountRepository accountRepository) {
-        this(port, boardFactory, accountRepository, DEFAULT_RESIGN_GRACE_MILLIS);
+        this(port, boardFactory, accountRepository, DEFAULT_RESIGN_GRACE_MILLIS, GameLogger.create("server", "server"));
     }
 
     public GameServer(int port, Supplier<Board> boardFactory, AccountRepository accountRepository, long resignGraceMillis) {
+        this(port, boardFactory, accountRepository, resignGraceMillis, GameLogger.create("server", "server"));
+    }
+
+    public GameServer(int port, Supplier<Board> boardFactory, AccountRepository accountRepository, long resignGraceMillis, GameLogger logger) {
+        this(port, boardFactory, accountRepository, resignGraceMillis, MATCH_SEARCH_TIMEOUT_MILLIS, logger);
+    }
+
+    /** The one constructor that lets tests override the 1-minute quick-match search timeout too, the same way the 4-arg/5-arg constructors already let them override the disconnect grace period - see GameServerDisconnectIntegrationTest's own class doc for why that matters for keeping tests fast. */
+    public GameServer(int port, Supplier<Board> boardFactory, AccountRepository accountRepository,
+                       long resignGraceMillis, long matchSearchTimeoutMillis, GameLogger logger) {
         super(new InetSocketAddress(port));
         this.boardFactory = boardFactory;
         this.accountRepository = accountRepository;
         this.resignGraceMillis = resignGraceMillis;
-        startNewRound();
+        this.matchSearchTimeoutMillis = matchSearchTimeoutMillis;
+        this.logger = logger;
     }
 
     @Override
     public void onStart() {
-        System.out.println("[GameServer] listening on port " + getPort());
+        logger.log("listening on port " + getPort());
     }
 
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        System.out.println("[GameServer] connection opened from " + conn.getRemoteSocketAddress());
-        // No color assignment here anymore - see the class doc. A newly
-        // opened connection still gets an immediate snapshot of whatever
-        // round is currently active/about to start, purely so a client that
-        // connects before logging in has something non-empty to render.
-        conn.send(buildStateMessage());
+        logger.log("connection opened from " + conn.getRemoteSocketAddress());
+        conn.send(buildRoomListMessage());
     }
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        waitingQueue.remove(conn);
-        String username = usernameByConnection.remove(conn);
-        accountByConnection.remove(conn);
-        Piece.Color releasedColor = colorByConnection.remove(conn);
-
-        synchronized (engineLock) {
-            boolean wasActivePlayer = (conn == whiteConnection || conn == blackConnection);
-            if (!wasActivePlayer) {
-                System.out.println("[GameServer] connection closed (queued/unassigned): " + reason);
-                return;
-            }
-
-            if (gameEngine.isGameOver()) {
-                // The round had already finished (or a new one hadn't
-                // properly started) by the time this close arrived - just
-                // free the seat, nothing to put on the clock.
-                if (conn == whiteConnection) whiteConnection = null;
-                if (conn == blackConnection) blackConnection = null;
-                tryStartMatch();
-            } else {
-                beginDisconnectGracePeriod(releasedColor, username);
-            }
+        // Room.removeConnection (via beginDisconnectGracePeriod) needs to
+        // read this connection's username to include it in the
+        // OPPONENT_DISCONNECTED broadcast - it must run BEFORE
+        // usernameByConnection/accountByConnection are cleared, or it reads
+        // null. accountByConnection deliberately stays populated until after
+        // too, for the same reason (Room.onGameEnded, which a forced
+        // resignation triggers synchronously from within removeConnection,
+        // reads accountByConnection for both players).
+        Room room = roomByConnection.remove(conn);
+        if (room != null) {
+            room.removeConnection(conn);
+            broadcastRoomList();
         }
-        System.out.println("[GameServer] connection closed (" + releasedColor + "): " + reason);
+        cancelMatchSearch(conn);
+        usernameByConnection.remove(conn);
+        accountByConnection.remove(conn);
+        logger.log("connection closed: " + reason);
     }
 
     @Override
@@ -209,11 +175,26 @@ public final class GameServer extends WebSocketServer {
             case Protocol.TYPE_LOGIN:
                 handleLogin(conn, parsed);
                 break;
+            case Protocol.TYPE_CREATE_ROOM:
+                handleCreateRoom(conn, parsed);
+                break;
+            case Protocol.TYPE_JOIN_ROOM:
+                handleJoinRoom(conn, parsed);
+                break;
+            case Protocol.TYPE_LEAVE_ROOM:
+                handleLeaveRoom(conn);
+                break;
+            case Protocol.TYPE_FIND_MATCH:
+                handleFindMatch(conn);
+                break;
+            case Protocol.TYPE_CANCEL_MATCH:
+                cancelMatchSearch(conn);
+                break;
             case Protocol.TYPE_MOVE:
-                handleMove(conn, parsed);
+                withRoom(conn, room -> room.handleMove(conn, parsed));
                 break;
             case Protocol.TYPE_JUMP:
-                handleJump(conn, parsed);
+                withRoom(conn, room -> room.handleJump(conn, parsed));
                 break;
             default:
                 conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "unknown type " + type));
@@ -222,15 +203,18 @@ public final class GameServer extends WebSocketServer {
 
     @Override
     public void onError(WebSocket conn, Exception ex) {
-        System.err.println("[GameServer] error on " + (conn == null ? "server" : conn.getRemoteSocketAddress()) + ": " + ex);
+        logger.log("error on " + (conn == null ? "server" : conn.getRemoteSocketAddress()) + ": " + ex);
     }
 
     /**
-     * Handles a LOGIN message: looks up (or, for a first-time username,
-     * creates) that player's persistent Account, sends it back as
-     * ACCOUNT_INFO, then either resumes a disconnected seat this same
-     * username still owns (tryResumeDisconnectedSeat) or joins the
-     * matchmaking queue (enqueueForMatch) - never both.
+     * CTD 26 spec slide 5: username + password, verified against SQLite (or
+     * InMemoryAccountRepository's in-memory equivalent) via
+     * AccountRepository.authenticate - see that method's class doc for the
+     * "first login claims the username" policy. A failed authentication
+     * (wrong password for an existing account) never puts anything into
+     * usernameByConnection/accountByConnection, so this connection stays
+     * exactly as unauthenticated as it was before the attempt - it can
+     * simply try LOGIN again.
      */
     private void handleLogin(WebSocket conn, Map<String, Object> message) {
         String username = Protocol.getString(message, "username");
@@ -238,9 +222,21 @@ public final class GameServer extends WebSocketServer {
             conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "username required"));
             return;
         }
-        usernameByConnection.put(conn, username);
+        String password = Protocol.getString(message, "password");
+        if (password == null || password.isEmpty()) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "password required"));
+            return;
+        }
 
-        Account account = accountRepository.findOrCreateAccount(username);
+        Account account;
+        try {
+            account = accountRepository.authenticate(username, password);
+        } catch (AuthenticationException e) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "invalid username or password"));
+            return;
+        }
+
+        usernameByConnection.put(conn, username);
         accountByConnection.put(conn, account);
         conn.send(Protocol.write(Protocol.TYPE_ACCOUNT_INFO,
                 "username", account.getUsername(),
@@ -248,216 +244,203 @@ public final class GameServer extends WebSocketServer {
                 "gamesPlayed", account.getGamesPlayed(),
                 "wins", account.getWins(),
                 "losses", account.getLosses()));
-
-        synchronized (engineLock) {
-            if (!tryResumeDisconnectedSeat(conn, username)) {
-                enqueueForMatch(conn);
-            }
-        }
-    }
-
-    /** Must be called while holding engineLock. If {@code username} matches the seat currently on a disconnect grace-period clock, cancels that clock and hands the seat to {@code conn} instead of queueing it fresh. */
-    private boolean tryResumeDisconnectedSeat(WebSocket conn, String username) {
-        if (disconnectedColor == null || !username.equals(disconnectedUsername)) {
-            return false;
-        }
-
-        Piece.Color color = disconnectedColor;
-        if (pendingResignTask != null) {
-            pendingResignTask.cancel(false);
-        }
-        pendingResignTask = null;
-        disconnectedColor = null;
-        disconnectedUsername = null;
-
-        if (color == Piece.Color.WHITE) {
-            whiteConnection = conn;
-        } else {
-            blackConnection = conn;
-        }
-        colorByConnection.put(conn, color);
-
-        conn.send(Protocol.write(Protocol.TYPE_COLOR_ASSIGNED, "color", color.name()));
-        conn.send(buildStateMessage());
-        broadcast(Protocol.write(Protocol.TYPE_OPPONENT_RECONNECTED, "color", color.name(), "username", username));
-        System.out.println("[GameServer] " + username + " reconnected as " + color);
-        return true;
-    }
-
-    /** Must be called while holding engineLock. Adds {@code conn} to the matchmaking queue and immediately tries to start a match (which succeeds right away if this was the second waiting connection). */
-    private void enqueueForMatch(WebSocket conn) {
-        waitingQueue.add(conn);
-        conn.send(Protocol.write(Protocol.TYPE_WAITING, "queuePosition", waitingQueue.size()));
-        tryStartMatch();
-    }
-
-    /** Must be called while holding engineLock. A no-op unless a round isn't currently active AND at least two connections are waiting - see the class doc for why this can safely be called from many different places (onGameEnded, enqueueForMatch, a freed-up seat after a non-grace-period close) without any of them needing to reason about whether a match is "already" startable. */
-    private void tryStartMatch() {
-        if (whiteConnection != null && blackConnection != null) return;
-
-        WebSocket first = pollNextOpenConnection();
-        if (first == null) return;
-        WebSocket second = pollNextOpenConnection();
-        if (second == null) {
-            waitingQueue.addFirst(first);
-            return;
-        }
-
-        whiteConnection = first;
-        blackConnection = second;
-        colorByConnection.put(first, Piece.Color.WHITE);
-        colorByConnection.put(second, Piece.Color.BLACK);
-
-        startNewRound();
-
-        first.send(Protocol.write(Protocol.TYPE_COLOR_ASSIGNED, "color", "WHITE"));
-        second.send(Protocol.write(Protocol.TYPE_COLOR_ASSIGNED, "color", "BLACK"));
-        first.send(buildStateMessage());
-        second.send(buildStateMessage());
-        System.out.println("[GameServer] match started: " + usernameByConnection.get(first) + " (WHITE) vs "
-                + usernameByConnection.get(second) + " (BLACK)");
-    }
-
-    private WebSocket pollNextOpenConnection() {
-        WebSocket conn;
-        while ((conn = waitingQueue.poll()) != null) {
-            if (conn.isOpen()) return conn;
-        }
-        return null;
-    }
-
-    /** Must be called while holding engineLock. Puts {@code color}'s seat on a resignGraceMillis clock: if tryResumeDisconnectedSeat doesn't cancel it first, forceResign runs once the clock elapses. */
-    private void beginDisconnectGracePeriod(Piece.Color color, String username) {
-        disconnectedColor = color;
-        disconnectedUsername = username;
-
-        broadcast(Protocol.write(Protocol.TYPE_OPPONENT_DISCONNECTED,
-                "color", color.name(), "username", username, "graceSeconds", resignGraceMillis / 1000));
-
-        pendingResignTask = disconnectExecutor.schedule(() -> forceResign(color), resignGraceMillis, TimeUnit.MILLISECONDS);
-    }
-
-    /** Runs on disconnectExecutor's own thread once a grace period elapses without a reconnect. */
-    private void forceResign(Piece.Color resigningColor) {
-        synchronized (engineLock) {
-            // If the player already reconnected (or a whole new round
-            // already started for other reasons) between scheduling this
-            // task and it actually firing, disconnectedColor won't match
-            // anymore - cancel() on the future should already prevent this
-            // in practice, but this check costs nothing and removes any
-            // reliance on cancellation timing being perfect.
-            if (disconnectedColor != resigningColor) return;
-
-            disconnectedColor = null;
-            disconnectedUsername = null;
-            pendingResignTask = null;
-
-            gameEngine.resign(resigningColor);
-            // gameEngine.resign publishes GameEndedEvent synchronously (see
-            // MovementEngine.setWinner) - onGameEnded, still within this
-            // same synchronized(engineLock) block via reentrancy, handles
-            // the ELO update, broadcast, freeing the seats, and kicking off
-            // the next matchmaking attempt. Nothing further to do here.
-        }
     }
 
     /**
-     * Builds a fresh round: a brand-new Board (from boardFactory) wired to a
-     * brand-new MovementEngine/MoveValidationService/DefaultGameEngine and a
-     * brand-new EventBus - exactly the same wiring recipe GuiMain/ServerMain
-     * always used, just repeated on demand instead of once at process
-     * startup. Re-subscribes the same four bus relays (score/move-log/
-     * game-started/game-ended -> broadcast) to the NEW bus, since EventBus
-     * has no unsubscribe (see its class doc) and the previous round's bus is
-     * simply abandoned along with the rest of that round's now-finished
-     * state. Must be called while holding engineLock.
+     * Creates a new room named per the message's "name" field (auto-generated
+     * if blank), rejecting the request if that name is already taken by an
+     * open room - room ids are just their (unique) display name, so there's
+     * no separate id-vs-name distinction for the lobby dialog to juggle.
+     * The creator is seated as White immediately (a fresh room always has
+     * both seats open, so assignSeat always gives the creator White - see
+     * Room.assignSeat).
      */
-    private void startNewRound() {
-        Board newBoard = boardFactory.get();
-        EventBus newBus = new EventBus();
-        MovementEngine movementEngine = new MovementEngine(newBoard, newBus);
-        MoveValidationService moveValidationService = new MoveValidationService(newBoard, movementEngine);
-        GameEngine newEngine = new DefaultGameEngine(newBoard, movementEngine, moveValidationService, Board.CELL_SIZE);
-
-        newBus.subscribe(ScoreUpdatedEvent.class, this::onScoreUpdated);
-        newBus.subscribe(MoveLoggedEvent.class, this::onMoveLogged);
-        newBus.subscribe(GameStartedEvent.class, event -> broadcast(Protocol.write(Protocol.TYPE_GAME_STARTED)));
-        newBus.subscribe(GameEndedEvent.class, this::onGameEnded);
-
-        this.board = newBoard;
-        this.gameEngine = newEngine;
-        this.bus = newBus;
-    }
-
-    private void handleMove(WebSocket conn, Map<String, Object> message) {
-        Piece.Color owner = colorByConnection.get(conn);
-        String fromSquare = Protocol.getString(message, "from");
-        String toSquare = Protocol.getString(message, "to");
-
-        Optional<Position> from = fromSquare == null ? Optional.empty() : Square.fromAlgebraic(fromSquare, board.getHeight());
-        Optional<Position> to = toSquare == null ? Optional.empty() : Square.fromAlgebraic(toSquare, board.getHeight());
-        if (!from.isPresent() || !to.isPresent()) {
-            conn.send(Protocol.write(Protocol.TYPE_MOVE_REJECTED, "square", fromSquare, "reason", "bad_square"));
+    private void handleCreateRoom(WebSocket conn, Map<String, Object> message) {
+        if (!usernameByConnection.containsKey(conn)) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "log in before creating a room"));
+            return;
+        }
+        if (roomByConnection.containsKey(conn)) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "already in a room - leave it first"));
             return;
         }
 
-        MoveResult result;
-        synchronized (engineLock) {
-            // Server-side ownership authority: a connection may only move a
-            // piece of its OWN assigned color - this is the one check that
-            // has no equivalent in the local/hot-seat InteractionHandler,
-            // since there both sides share one input source and this
-            // distinction doesn't exist.
-            Piece piece = board.getPiece(from.get());
-            if (owner == null || piece == null || piece.getColor() != owner) {
-                result = MoveResult.rejected("not_your_piece");
-            } else {
-                result = gameEngine.requestMove(from.get(), to.get());
-            }
-        }
-        if (!result.isAccepted()) {
-            conn.send(Protocol.write(Protocol.TYPE_MOVE_REJECTED, "square", toSquare, "reason", result.getReason()));
-        }
-    }
+        String requestedName = Protocol.getString(message, "name");
+        String name = (requestedName == null || requestedName.trim().isEmpty())
+                ? "Room-" + roomCounter.incrementAndGet()
+                : requestedName.trim();
 
-    private void handleJump(WebSocket conn, Map<String, Object> message) {
-        Piece.Color owner = colorByConnection.get(conn);
-        String squareName = Protocol.getString(message, "square");
-        Optional<Position> square = squareName == null ? Optional.empty() : Square.fromAlgebraic(squareName, board.getHeight());
-        if (!square.isPresent()) {
-            conn.send(Protocol.write(Protocol.TYPE_JUMP_REJECTED, "square", squareName, "reason", "bad_square"));
+        if (roomsById.containsKey(name)) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "a room named '" + name + "' already exists"));
             return;
         }
 
-        JumpResult result;
-        synchronized (engineLock) {
-            Piece piece = board.getPiece(square.get());
-            if (owner == null || piece == null || piece.getColor() != owner) {
-                result = JumpResult.rejected("not_your_piece");
+        Room room = new Room(name, boardFactory, accountRepository, resignGraceMillis,
+                disconnectExecutor, logger, usernameByConnection, accountByConnection);
+        roomsById.put(name, room);
+        roomByConnection.put(conn, room);
+        room.assignSeat(conn);
+
+        logger.log(usernameByConnection.get(conn) + " created room '" + name + "'");
+        broadcastRoomList();
+    }
+
+    private void handleJoinRoom(WebSocket conn, Map<String, Object> message) {
+        if (!usernameByConnection.containsKey(conn)) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "log in before joining a room"));
+            return;
+        }
+        if (roomByConnection.containsKey(conn)) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "already in a room - leave it first"));
+            return;
+        }
+
+        String roomId = Protocol.getString(message, "roomId");
+        Room room = roomId == null ? null : roomsById.get(roomId);
+        if (room == null) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "no such room: " + roomId));
+            return;
+        }
+
+        roomByConnection.put(conn, room);
+        if (!room.tryResumeDisconnectedSeat(conn, usernameByConnection.get(conn))) {
+            if (room.hasOpenSeat()) {
+                room.assignSeat(conn);
             } else {
-                result = gameEngine.requestJump(square.get());
+                room.addSpectator(conn);
             }
         }
-        if (!result.isAccepted()) {
-            conn.send(Protocol.write(Protocol.TYPE_JUMP_REJECTED, "square", squareName, "reason", result.getReason()));
+        broadcastRoomList();
+    }
+
+    private void handleLeaveRoom(WebSocket conn) {
+        Room room = roomByConnection.remove(conn);
+        if (room == null) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "not currently in a room"));
+            return;
         }
+        room.removeConnection(conn);
+        broadcastRoomList();
     }
 
     /**
-     * Runs the server's own tick loop on a dedicated daemon thread: advances
-     * the engine's clock and broadcasts a fresh STATE snapshot to every
-     * connected client, at roughly the same ~33ms cadence GameLoop uses for
-     * local play. Separate method (not started from the constructor) so
-     * ServerMain controls exactly when the game clock starts running.
+     * CTD 26 spec slide 6's "Play" button: looks for another connection
+     * already waiting whose ELO is within MATCH_ELO_RANGE of this one's. If
+     * one is found, both are removed from the waiting list and seated
+     * together in a brand-new auto-named room (same seat-assignment
+     * mechanics CREATE_ROOM/JOIN_ROOM already use - the waiting player, who
+     * arrived first, gets White). If not, this connection joins the waiting
+     * list itself with a MATCH_SEARCH_TIMEOUT_MILLIS countdown that sends
+     * MATCH_NOT_FOUND if nobody suitable shows up in time.
+     */
+    private void handleFindMatch(WebSocket conn) {
+        if (!usernameByConnection.containsKey(conn)) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "log in before playing"));
+            return;
+        }
+        if (roomByConnection.containsKey(conn)) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "already in a room - leave it first"));
+            return;
+        }
+
+        int myElo = accountByConnection.get(conn).getElo();
+
+        WaitingPlayer opponent = null;
+        synchronized (waitingPlayersLock) {
+            for (Iterator<WaitingPlayer> it = waitingPlayers.iterator(); it.hasNext(); ) {
+                WaitingPlayer candidate = it.next();
+                if (Math.abs(candidate.elo - myElo) <= MATCH_ELO_RANGE) {
+                    it.remove();
+                    opponent = candidate;
+                    break;
+                }
+            }
+            if (opponent == null) {
+                if (waitingPlayers.stream().anyMatch(w -> w.conn == conn)) {
+                    return; // already searching - a duplicate FIND_MATCH is a harmless no-op
+                }
+                ScheduledFuture<?> timeoutTask = disconnectExecutor.schedule(
+                        () -> onMatchSearchTimedOut(conn), matchSearchTimeoutMillis, TimeUnit.MILLISECONDS);
+                waitingPlayers.add(new WaitingPlayer(conn, myElo, timeoutTask));
+            }
+        }
+
+        if (opponent == null) {
+            conn.send(Protocol.write(Protocol.TYPE_WAITING, "message", "searching for an opponent within " + MATCH_ELO_RANGE + " ELO"));
+            logger.log(usernameByConnection.get(conn) + " (ELO " + myElo + ") is searching for a quick match");
+            return;
+        }
+
+        opponent.timeoutTask.cancel(false);
+        String roomId = "Match-" + matchRoomCounter.incrementAndGet();
+        Room room = new Room(roomId, boardFactory, accountRepository, resignGraceMillis,
+                disconnectExecutor, logger, usernameByConnection, accountByConnection);
+        roomsById.put(roomId, room);
+        roomByConnection.put(opponent.conn, room);
+        roomByConnection.put(conn, room);
+        room.assignSeat(opponent.conn); // arrived first -> White
+        room.assignSeat(conn);          // matched second -> Black
+
+        logger.log("quick match: " + usernameByConnection.get(opponent.conn) + " (ELO " + opponent.elo + ") vs "
+                + usernameByConnection.get(conn) + " (ELO " + myElo + ") in room '" + roomId + "'");
+        broadcastRoomList();
+    }
+
+    private void onMatchSearchTimedOut(WebSocket conn) {
+        boolean wasWaiting;
+        synchronized (waitingPlayersLock) {
+            wasWaiting = waitingPlayers.removeIf(w -> w.conn == conn);
+        }
+        if (wasWaiting && conn.isOpen()) {
+            conn.send(Protocol.write(Protocol.TYPE_MATCH_NOT_FOUND,
+                    "message", "no opponent found within " + MATCH_ELO_RANGE + " ELO in "
+                            + (matchSearchTimeoutMillis / 1000) + "s"));
+        }
+    }
+
+    /** Removes {@code conn} from the quick-match waiting list if it's on it (idempotent - a no-op if it isn't), cancelling its timeout task either way. Used for both an explicit CANCEL_MATCH and cleanup on disconnect. */
+    private void cancelMatchSearch(WebSocket conn) {
+        synchronized (waitingPlayersLock) {
+            for (Iterator<WaitingPlayer> it = waitingPlayers.iterator(); it.hasNext(); ) {
+                WaitingPlayer candidate = it.next();
+                if (candidate.conn == conn) {
+                    candidate.timeoutTask.cancel(false);
+                    it.remove();
+                    return;
+                }
+            }
+        }
+    }
+
+    private interface RoomAction {
+        void run(Room room);
+    }
+
+    private void withRoom(WebSocket conn, RoomAction action) {
+        Room room = roomByConnection.get(conn);
+        if (room == null) {
+            conn.send(Protocol.write(Protocol.TYPE_ERROR, "message", "not currently in a room"));
+            return;
+        }
+        action.run(room);
+    }
+
+    /**
+     * Runs every open room's tick on a single shared daemon thread, once per
+     * ~33ms interval - each Room.tick call advances that room's own clock
+     * and broadcasts to that room's own members only (see Room.tick). One
+     * shared thread for every room (rather than one thread per room) keeps
+     * this simple and is more than fast enough at the scale a single
+     * process's rooms will ever reach - ticking N rooms is O(N) trivial work
+     * per interval, not N concurrent blocking operations.
      */
     public void startGameLoop() {
         Thread loop = new Thread(() -> {
             long tickMillis = 33;
             while (true) {
-                synchronized (engineLock) {
-                    gameEngine.advanceTime(tickMillis);
+                for (Room room : roomsById.values()) {
+                    room.tick(tickMillis);
                 }
-                broadcast(buildStateMessage());
                 try {
                     Thread.sleep(tickMillis);
                 } catch (InterruptedException e) {
@@ -470,105 +453,18 @@ public final class GameServer extends WebSocketServer {
         loop.start();
     }
 
-    /**
-     * Serializes a base GameSnapshot - selectedPosition/rejectedPosition are
-     * deliberately NOT included: those are per-viewer UI concerns (which
-     * square THIS player has clicked), not authoritative game state, so the
-     * server has nothing meaningful to put there. Each client reconstructs
-     * its own composite GameSnapshot locally by overlaying its own selection
-     * onto this base - see NetworkInputReceiver/GameClient.
-     */
-    private String buildStateMessage() {
-        GameSnapshot snapshot;
-        synchronized (engineLock) {
-            snapshot = gameEngine.snapshot(null, null, -1);
-        }
-
-        List<Object> pieces = new ArrayList<>();
-        for (PieceSnapshot p : snapshot.getPieces()) {
-            Map<String, Object> pieceMap = new LinkedHashMap<>();
-            pieceMap.put("id", p.getId());
-            pieceMap.put("color", p.getColor().name());
-            pieceMap.put("type", p.getType().name());
-            pieceMap.put("x", p.getPixelX());
-            pieceMap.put("y", p.getPixelY());
-            pieceMap.put("state", p.getVisualState().name());
-            pieceMap.put("elapsed", p.getStateElapsedMillis());
-            pieces.add(pieceMap);
-        }
-
-        return Protocol.write(Protocol.TYPE_STATE,
-                "boardWidth", snapshot.getBoardWidth(),
-                "boardHeight", snapshot.getBoardHeight(),
-                "gameTimeMillis", snapshot.getGameTimeMillis(),
-                "gameOver", snapshot.isGameOver(),
-                "winner", snapshot.getWinner() == null ? null : snapshot.getWinner().name(),
-                "pieces", pieces);
+    private void broadcastRoomList() {
+        broadcast(buildRoomListMessage());
     }
 
-    private void onScoreUpdated(ScoreUpdatedEvent event) {
-        broadcast(Protocol.write(Protocol.TYPE_SCORE,
-                "color", event.getColor().name(),
-                "score", event.getNewScore()));
-    }
-
-    private void onMoveLogged(MoveLoggedEvent event) {
-        broadcast(Protocol.write(Protocol.TYPE_MOVE_LOG,
-                "color", event.getEntry().getColor().name(),
-                "timeMillis", event.getEntry().getTimeMillis(),
-                "notation", event.getEntry().getNotation(),
-                "capture", event.isCapture()));
-    }
-
-    /**
-     * Fires synchronously off MovementEngine's own capture-resolution code
-     * (or DefaultGameEngine.resign, for a forced auto-resign) - always from
-     * inside a synchronized(engineLock) block (handleMove/handleJump/the
-     * tick loop/forceResign), so this method runs WHILE holding engineLock.
-     * It does a couple of small, fast SQLite writes plus a couple of network
-     * broadcasts in that window; acceptable for this project's scope (a
-     * single one-time event per game, not a hot path).
-     *
-     * Only updates ELO when BOTH sides are real, logged-in accounts
-     * (accountByConnection has an entry for both the winning and losing
-     * connection) - a spectator-only or single-player session still ends
-     * the game and still broadcasts GAME_ENDED, just without any rating
-     * fields attached.
-     *
-     * Regardless of how the round ended, both seats are freed and
-     * tryStartMatch is invoked at the end - this is the ONE place every
-     * round-ending path (king capture, forced resignation) converges, so
-     * it's the natural single place to hand the table to the next two
-     * waiting players, if any.
-     */
-    private void onGameEnded(GameEndedEvent event) {
-        Piece.Color winnerColor = event.getWinner();
-        WebSocket winnerConn = winnerColor == Piece.Color.WHITE ? whiteConnection : blackConnection;
-        WebSocket loserConn = winnerColor == Piece.Color.WHITE ? blackConnection : whiteConnection;
-
-        Account winnerAccount = winnerConn == null ? null : accountByConnection.get(winnerConn);
-        Account loserAccount = loserConn == null ? null : accountByConnection.get(loserConn);
-
-        if (winnerAccount == null || loserAccount == null) {
-            broadcast(Protocol.write(Protocol.TYPE_GAME_ENDED, "winner", winnerColor.name()));
-        } else {
-            EloRating.Result result = EloRating.computeForWin(winnerAccount.getElo(), loserAccount.getElo());
-            accountRepository.recordGameResult(
-                    winnerAccount.getUsername(), result.getNewWinnerRating(),
-                    loserAccount.getUsername(), result.getNewLoserRating());
-
-            broadcast(Protocol.write(Protocol.TYPE_GAME_ENDED,
-                    "winner", winnerColor.name(),
-                    "winnerUsername", winnerAccount.getUsername(),
-                    "winnerNewElo", result.getNewWinnerRating(),
-                    "winnerEloDelta", result.getNewWinnerRating() - winnerAccount.getElo(),
-                    "loserUsername", loserAccount.getUsername(),
-                    "loserNewElo", result.getNewLoserRating(),
-                    "loserEloDelta", result.getNewLoserRating() - loserAccount.getElo()));
+    private String buildRoomListMessage() {
+        List<Object> summaries = new ArrayList<>();
+        for (Room room : roomsById.values()) {
+            summaries.add(room.summarize());
         }
-
-        whiteConnection = null;
-        blackConnection = null;
-        tryStartMatch();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", Protocol.TYPE_ROOM_LIST);
+        payload.put("rooms", summaries);
+        return Json.write(payload);
     }
 }

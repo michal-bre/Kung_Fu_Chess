@@ -70,13 +70,16 @@ public class GameServerDisconnectIntegrationTest {
         server.stop(0);
     }
 
-    /** Logs both connections in, in a deterministic order (see GameServerIntegrationTest's class doc for why LOGIN sends need to be serialized this way), and waits for both COLOR_ASSIGNED messages before returning. */
-    private void loginBothAndAwaitMatch(BlockingQueue<Map<String, Object>> whiteMessages, BlockingQueue<Map<String, Object>> blackMessages) throws InterruptedException {
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
+    /** Logs both connections in, in a deterministic order (see GameServerIntegrationTest's class doc for why LOGIN sends need to be serialized this way), has white create {@code roomName} and black join it, and waits for both COLOR_ASSIGNED messages before returning. */
+    private void loginBothAndPlayInRoom(BlockingQueue<Map<String, Object>> whiteMessages, BlockingQueue<Map<String, Object>> blackMessages, String roomName) throws InterruptedException {
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
         takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
-        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob")));
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob", "password", "pw")));
         takeOfType(blackMessages, Protocol.TYPE_ACCOUNT_INFO);
+
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_CREATE_ROOM, "name", roomName)));
         takeOfType(whiteMessages, Protocol.TYPE_COLOR_ASSIGNED);
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_JOIN_ROOM, "roomId", roomName)));
         takeOfType(blackMessages, Protocol.TYPE_COLOR_ASSIGNED);
     }
 
@@ -88,7 +91,7 @@ public class GameServerDisconnectIntegrationTest {
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
         black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
         assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-        loginBothAndAwaitMatch(whiteMessages, blackMessages);
+        loginBothAndPlayInRoom(whiteMessages, blackMessages, "disconnect-notify-room");
 
         white.closeBlocking();
 
@@ -105,18 +108,26 @@ public class GameServerDisconnectIntegrationTest {
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
         black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
         assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-        loginBothAndAwaitMatch(whiteMessages, blackMessages);
+        loginBothAndPlayInRoom(whiteMessages, blackMessages, "reconnect-room");
 
         white.closeBlocking();
         takeOfType(blackMessages, Protocol.TYPE_OPPONENT_DISCONNECTED);
 
         // Reconnect well within the 800ms grace period, as a brand-new
         // WebSocket connection (exactly what a real client restarting would
-        // produce) - same username.
+        // produce) - same username, and explicitly re-joining the same room:
+        // with multiple concurrent rooms possible (Phase 5), the server has
+        // no way to guess which disconnected seat a bare LOGIN is trying to
+        // resume, so the reconnecting client has to name the room, exactly
+        // like joining fresh - Room.tryResumeDisconnectedSeat is what
+        // notices the username matches a seat already on this room's grace
+        // clock and resumes it instead of adding a new spectator/player.
         BlockingQueue<Map<String, Object>> reconnectMessages = new LinkedBlockingQueue<>();
         RecordingClient reconnected = new RecordingClient(new URI("ws://localhost:" + port), reconnectMessages);
         assertTrue(reconnected.connectBlocking(5, TimeUnit.SECONDS));
-        reconnected.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
+        reconnected.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
+        takeOfType(reconnectMessages, Protocol.TYPE_ACCOUNT_INFO);
+        reconnected.send(Json.write(Protocol.msg(Protocol.TYPE_JOIN_ROOM, "roomId", "reconnect-room")));
 
         Map<String, Object> colorAssigned = takeOfType(reconnectMessages, Protocol.TYPE_COLOR_ASSIGNED);
         assertEquals("WHITE", colorAssigned.get("color"));
@@ -150,7 +161,7 @@ public class GameServerDisconnectIntegrationTest {
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
         black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
         assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-        loginBothAndAwaitMatch(whiteMessages, blackMessages);
+        loginBothAndPlayInRoom(whiteMessages, blackMessages, "force-resign-room");
 
         white.closeBlocking();
         takeOfType(blackMessages, Protocol.TYPE_OPPONENT_DISCONNECTED);
@@ -161,21 +172,24 @@ public class GameServerDisconnectIntegrationTest {
     }
 
     @Test
-    public void afterAForcedResignationTheTableIsFreeForANewMatch() throws Exception {
+    public void aFinishedRoomDoesNotPreventABrandNewRoomFromBeingCreatedAndJoined() throws Exception {
         BlockingQueue<Map<String, Object>> whiteMessages = new LinkedBlockingQueue<>();
         BlockingQueue<Map<String, Object>> blackMessages = new LinkedBlockingQueue<>();
         white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
         black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
         assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-        loginBothAndAwaitMatch(whiteMessages, blackMessages);
+        loginBothAndPlayInRoom(whiteMessages, blackMessages, "old-room");
 
         white.closeBlocking();
         takeOfType(blackMessages, Protocol.TYPE_OPPONENT_DISCONNECTED);
         takeOfType(blackMessages, Protocol.TYPE_GAME_ENDED, GRACE_MILLIS + 4000);
 
-        // A brand-new pair of players should be able to start a fresh match
-        // on the now-freed table.
+        // Since Phase 5, a finished room just stays finished - there's no
+        // implicit "table" that frees itself for the next pair. A brand-new
+        // pair of players creating/joining their OWN new room must still
+        // work fine regardless of what happened in the old one (this is
+        // really a room-isolation check wearing a disconnect-flow costume).
         BlockingQueue<Map<String, Object>> carolMessages = new LinkedBlockingQueue<>();
         BlockingQueue<Map<String, Object>> daveMessages = new LinkedBlockingQueue<>();
         RecordingClient carol = new RecordingClient(new URI("ws://localhost:" + port), carolMessages);
@@ -183,12 +197,14 @@ public class GameServerDisconnectIntegrationTest {
         RecordingClient dave = new RecordingClient(new URI("ws://localhost:" + port), daveMessages);
         assertTrue(dave.connectBlocking(5, TimeUnit.SECONDS));
 
-        carol.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Carol")));
+        carol.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Carol", "password", "pw")));
         takeOfType(carolMessages, Protocol.TYPE_ACCOUNT_INFO);
-        dave.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Dave")));
+        dave.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Dave", "password", "pw")));
         takeOfType(daveMessages, Protocol.TYPE_ACCOUNT_INFO);
 
+        carol.send(Json.write(Protocol.msg(Protocol.TYPE_CREATE_ROOM, "name", "new-room")));
         Map<String, Object> carolColor = takeOfType(carolMessages, Protocol.TYPE_COLOR_ASSIGNED);
+        dave.send(Json.write(Protocol.msg(Protocol.TYPE_JOIN_ROOM, "roomId", "new-room")));
         Map<String, Object> daveColor = takeOfType(daveMessages, Protocol.TYPE_COLOR_ASSIGNED);
         assertEquals("WHITE", carolColor.get("color"));
         assertEquals("BLACK", daveColor.get("color"));

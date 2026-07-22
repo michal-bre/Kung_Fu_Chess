@@ -71,4 +71,75 @@ public class InMemoryAccountRepositoryTest {
         assertEquals(2, alice.getWins());
         assertEquals(1230, alice.getElo());
     }
+
+    // --- authenticate (Phase 7: CTD 26 spec slide 5, username + password) ---
+
+    @Test
+    public void authenticateCreatesABrandNewAccountOnItsFirstEverLogin() {
+        AccountRepository repo = new InMemoryAccountRepository();
+
+        Account account = repo.authenticate("alice", "correct-horse");
+
+        assertEquals("alice", account.getUsername());
+        assertEquals(EloRating.DEFAULT_RATING, account.getElo());
+    }
+
+    @Test
+    public void authenticateSucceedsAgainWithTheSamePasswordOnASecondLogin() {
+        AccountRepository repo = new InMemoryAccountRepository();
+        repo.authenticate("alice", "correct-horse");
+
+        Account account = repo.authenticate("alice", "correct-horse");
+
+        assertEquals("alice", account.getUsername());
+    }
+
+    @Test(expected = AuthenticationException.class)
+    public void authenticateRejectsAWrongPasswordForAnAccountThatAlreadyHasOneOnFile() {
+        AccountRepository repo = new InMemoryAccountRepository();
+        repo.authenticate("alice", "correct-horse");
+
+        repo.authenticate("alice", "wrong-password");
+    }
+
+    @Test
+    public void authenticateAdoptsWhateverPasswordIsGivenForAnAccountWithNoneOnFileYet() {
+        // Mirrors a legacy account created before password auth existed (or,
+        // as here, one seeded directly via recordGameResult the way
+        // GameServerAccountIntegrationTest's persisted-rating test does) -
+        // it must not be permanently locked out just because it predates
+        // this method.
+        AccountRepository repo = new InMemoryAccountRepository();
+        repo.recordGameResult("alice", 1250, "bob", 1150);
+
+        Account account = repo.authenticate("alice", "brand-new-password");
+
+        assertEquals(1250, account.getElo()); // the existing account, not a fresh one
+        assertEquals("alice", account.getUsername());
+
+        // That password is now on file - a second login must require it.
+        try {
+            repo.authenticate("alice", "some-other-password");
+            fail("expected AuthenticationException once a password has been claimed");
+        } catch (AuthenticationException expected) {
+            // expected
+        }
+    }
+
+    @Test
+    public void authenticateDoesNotConfuseTwoDifferentUsernamesPasswords() {
+        AccountRepository repo = new InMemoryAccountRepository();
+        repo.authenticate("alice", "alice-password");
+        repo.authenticate("bob", "bob-password");
+
+        // Each username's password is independent - alice's password must
+        // not work for bob's account, even though both were "claimed" in
+        // the same repository.
+        try {
+            repo.authenticate("bob", "alice-password");
+            fail("expected AuthenticationException - alice's password must not authenticate bob");
+        } catch (AuthenticationException expected) {
+            // expected
+        }
+    }
 }

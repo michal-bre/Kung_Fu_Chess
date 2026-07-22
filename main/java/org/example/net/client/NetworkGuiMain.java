@@ -13,6 +13,7 @@ import org.example.view.GameWindow;
 import org.example.view.ImgRenderer;
 import org.example.view.Renderer;
 
+import java.io.Console;
 import java.net.URI;
 import java.util.Scanner;
 import java.util.concurrent.TimeUnit;
@@ -22,10 +23,15 @@ import java.util.concurrent.TimeUnit;
  * network counterpart to GuiMain (local hot-seat mode remains completely
  * untouched and reachable via GuiMain, per the "keep both" decision).
  *
- * Per the CTD 26 spec's shell-based login (slide 4): the username prompt
- * happens on the console, via a plain Scanner, BEFORE any Swing window is
- * created - mirroring CommandLineAdapter's existing Scanner-based input
- * pattern, just for a single line instead of a full board/commands loop.
+ * Per the CTD 26 spec's shell-based login (slides 4-5: username, then
+ * username+password): the prompts happen on the console, via a plain
+ * Scanner, BEFORE any Swing window is created - mirroring
+ * CommandLineAdapter's existing Scanner-based input pattern, just for a
+ * couple of lines instead of a full board/commands loop. The password
+ * prompt masks input via java.io.Console when one is available (a real
+ * terminal); when run from an IDE's console (no real Console - see
+ * readPassword), it falls back to plain, unmasked Scanner input instead of
+ * failing outright.
  *
  * Reuses BoardView, GamePanel, ImgRenderer, GameWindow, BoardInputListener,
  * and SoundPlayer completely unchanged from local mode - see BoardView's,
@@ -57,6 +63,7 @@ public final class NetworkGuiMain {
         if (username.isEmpty()) {
             username = "Player" + (System.currentTimeMillis() % 1000);
         }
+        String password = readPassword(scanner);
 
         EventBus localBus = new EventBus();
 
@@ -70,6 +77,7 @@ public final class NetworkGuiMain {
         GameClient gameClient = new GameClient(
                 URI.create("ws://" + host + ":" + port),
                 username,
+                password,
                 localBus,
                 () -> {
                     if (boardViewHolder[0] != null) boardViewHolder[0].repaint();
@@ -102,7 +110,19 @@ public final class NetworkGuiMain {
 
         GamePanel gamePanel = new GamePanel(boardView, localBus);
 
-        GameWindow window = new GameWindow("Kung Fu Chess — " + username, gamePanel);
+        // Phase 8: a live roster of everyone in the room and their role
+        // ("Alice - White", "Carol - Viewer", ...) - network-only, so it's
+        // composed alongside GamePanel here rather than added to GamePanel
+        // itself (see NetworkGameLayout's class doc). Wired directly to
+        // GameClient rather than through the shared EventBus, since
+        // connectionStatus (WAITING/OPPONENT_DISCONNECTED/...) already sets
+        // the precedent for network-only UI state bypassing the bus that
+        // both local and networked modes share.
+        RosterPanel rosterPanel = new RosterPanel();
+        gameClient.setRosterListener(() -> rosterPanel.refresh(gameClient.getRoster()));
+        NetworkGameLayout networkGameLayout = new NetworkGameLayout(gamePanel, rosterPanel);
+
+        GameWindow window = new GameWindow("Kung Fu Chess — " + username, networkGameLayout);
         windowHolder[0] = window;
         localBus.subscribe(GameStartedEvent.class, event -> window.setStatus("Game in progress"));
         localBus.subscribe(GameEndedEvent.class, event -> {
@@ -118,6 +138,59 @@ public final class NetworkGuiMain {
             System.exit(1);
         }
 
+        // LOGIN was already sent from GameClient.onOpen the moment the
+        // handshake completed, above - wait here for its definitive answer
+        // (ACCOUNT_INFO on success, ERROR on a wrong password for an
+        // existing account) before doing anything else, so a bad password
+        // fails loudly and immediately instead of silently falling through
+        // to a lobby where every room action would then fail too.
+        long loginDeadline = System.currentTimeMillis() + 5000;
+        while (gameClient.getMyAccount() == null && gameClient.getLastError() == null
+                && System.currentTimeMillis() < loginDeadline) {
+            Thread.sleep(50);
+        }
+        if (gameClient.getMyAccount() == null) {
+            String reason = gameClient.getLastError() != null ? gameClient.getLastError() : "no response from server";
+            System.err.println("Login failed: " + reason);
+            System.err.println("Run the program again to retry with a different username/password.");
+            gameClient.close();
+            System.exit(1);
+        }
+
+        // Phase 5: the Create/Join/Cancel room lobby gates the game window -
+        // LOGIN alone no longer puts a connection into any game (see
+        // GameServer's class doc); the player has to explicitly pick a room
+        // first. RoomLobbyDialog blocks until that happens (or Cancel).
+        boolean joinedARoom = RoomLobbyDialog.show(gameClient, username);
+        if (!joinedARoom) {
+            System.out.println("Cancelled - no room joined.");
+            gameClient.close();
+            System.exit(0);
+        }
+
         window.show();
+    }
+
+    /**
+     * Prompts for a password on the console, masking keystrokes via
+     * {@code System.console()} when a real system console is attached - the
+     * normal case when this program is launched from an actual terminal.
+     * {@code System.console()} returns null when there ISN'T one, which is
+     * exactly what happens running this class from most IDEs' built-in Run
+     * windows (IntelliJ included - its Run console is not a real system
+     * console) - in that case this falls back to plain Scanner input with a
+     * one-line heads-up that it won't be masked, rather than throwing a
+     * NullPointerException or refusing to let the player log in at all.
+     */
+    private static String readPassword(Scanner scanner) {
+        Console console = System.console();
+        if (console != null) {
+            char[] entered = console.readPassword("Enter your password: ");
+            String password = new String(entered);
+            java.util.Arrays.fill(entered, ' ');
+            return password;
+        }
+        System.out.print("Enter your password (not masked - no console attached): ");
+        return scanner.nextLine();
     }
 }

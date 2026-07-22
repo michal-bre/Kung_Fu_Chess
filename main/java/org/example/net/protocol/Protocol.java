@@ -19,10 +19,21 @@ import java.util.Map;
  *
  * Direction reference (see GameServer/GameClient for the actual send/receive
  * code - this class only names the shape):
- *   client -> server: LOGIN, MOVE, JUMP
+ *   client -> server: LOGIN (username + password - see Protocol's LOGIN note
+ *                      below), MOVE, JUMP, CREATE_ROOM, JOIN_ROOM, LEAVE_ROOM,
+ *                      FIND_MATCH, CANCEL_MATCH
  *   server -> client: COLOR_ASSIGNED, ACCOUNT_INFO, STATE, SCORE, MOVE_LOG,
  *                      GAME_STARTED, GAME_ENDED, MOVE_REJECTED,
- *                      JUMP_REJECTED, ERROR
+ *                      JUMP_REJECTED, ERROR, ROOM_LIST, SPECTATING, WAITING,
+ *                      MATCH_NOT_FOUND, OPPONENT_DISCONNECTED,
+ *                      OPPONENT_RECONNECTED
+ *
+ * LOGIN (CTD 26 spec slide 5) carries both "username" and "password" fields.
+ * GameServer.handleLogin hands both to AccountRepository.authenticate, which
+ * treats the first successful login for any username as claiming that
+ * username with that password - there is no separate "sign up" step. See
+ * AccountRepository.authenticate's class doc for exactly what happens on a
+ * second login with a matching vs. mismatched password.
  *
  * GAME_ENDED carries extra winnerUsername/winnerNewElo/winnerEloDelta/
  * loserUsername/loserNewElo/loserEloDelta fields (Phase 3) whenever both
@@ -54,6 +65,37 @@ public final class Protocol {
     public static final String TYPE_WAITING = "WAITING";
     public static final String TYPE_OPPONENT_DISCONNECTED = "OPPONENT_DISCONNECTED";
     public static final String TYPE_OPPONENT_RECONNECTED = "OPPONENT_RECONNECTED";
+
+    // Phase 5: rooms + spectators. Replaces Phase 4's implicit
+    // LOGIN-auto-queues-you matchmaking with an explicit lobby: after LOGIN,
+    // a client sees the open-room list and chooses to CREATE_ROOM or
+    // JOIN_ROOM (or LEAVE_ROOM once seated/spectating) rather than being
+    // silently queued.
+    public static final String TYPE_CREATE_ROOM = "CREATE_ROOM";
+    public static final String TYPE_JOIN_ROOM = "JOIN_ROOM";
+    public static final String TYPE_LEAVE_ROOM = "LEAVE_ROOM";
+    public static final String TYPE_ROOM_LIST = "ROOM_LIST";
+    public static final String TYPE_SPECTATING = "SPECTATING";
+
+    // Phase 8: every participant in a room (not just "what am I") - a live
+    // roster of {username, role ("WHITE"/"BLACK"/"SPECTATOR"), disconnected}
+    // entries, rebroadcast to everyone currently in the room (players and
+    // spectators alike) whenever a seat/spectator joins, leaves, disconnects,
+    // or reconnects. See Room.buildRoster for exactly what "disconnected"
+    // means here (a seat still mid-grace-period, not yet auto-resigned).
+    public static final String TYPE_ROOM_ROSTER = "ROOM_ROSTER";
+
+    // Phase 7: the CTD 26 spec's "Play" button (slide 6) - ELO +-100
+    // auto-matchmaking, offered on the same Home screen as Room (slide 7)
+    // rather than instead of it. FIND_MATCH requests a match; WAITING
+    // (already defined above) is reused as the "still searching" ack while
+    // none has been found yet; MATCH_NOT_FOUND fires once the 1-minute
+    // search window (GameServer.MATCH_SEARCH_TIMEOUT_MILLIS) elapses with no
+    // opponent in range; CANCEL_MATCH lets the player give up early (e.g.
+    // closing the searching dialog) without waiting for that timeout.
+    public static final String TYPE_FIND_MATCH = "FIND_MATCH";
+    public static final String TYPE_CANCEL_MATCH = "CANCEL_MATCH";
+    public static final String TYPE_MATCH_NOT_FOUND = "MATCH_NOT_FOUND";
 
     /**
      * Builds a message object: {@code msg(TYPE_MOVE, "from", "e2", "to", "e4")}

@@ -83,7 +83,7 @@ public class GameServerAccountIntegrationTest {
         white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
 
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
 
         Map<String, Object> accountInfo = takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
         assertEquals("Alice", accountInfo.get("username"));
@@ -99,7 +99,7 @@ public class GameServerAccountIntegrationTest {
         white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
 
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
 
         Map<String, Object> accountInfo = takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
         assertEquals(1250.0, accountInfo.get("elo"));
@@ -119,12 +119,17 @@ public class GameServerAccountIntegrationTest {
         // See GameServerIntegrationTest for why white's LOGIN must be
         // confirmed (via its ACCOUNT_INFO ack) before black's is sent - two
         // sends this close together over separate connections have no
-        // guaranteed arrival order at the server otherwise.
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
+        // guaranteed arrival order at the server otherwise. Since Phase 5,
+        // LOGIN alone doesn't seat anyone - white creates the room, black
+        // joins it.
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
         takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
-        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob")));
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob", "password", "pw")));
         takeOfType(blackMessages, Protocol.TYPE_ACCOUNT_INFO);
+
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_CREATE_ROOM, "name", "king-capture-room")));
         takeOfType(whiteMessages, Protocol.TYPE_COLOR_ASSIGNED);
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_JOIN_ROOM, "roomId", "king-capture-room")));
         takeOfType(blackMessages, Protocol.TYPE_COLOR_ASSIGNED);
 
         // The white rook at a8 slides onto the black king at c8 - a 2-square

@@ -24,19 +24,21 @@ import static org.junit.Assert.*;
 
 /**
  * A real, no-mocking end-to-end test of the networked stack's core
- * connectivity + matchmaking (CTD 26 spec slides 3-4): starts an actual
- * GameServer on a real loopback port and drives it with plain
- * org.java_websocket clients (not GameClient) that exercise exactly the same
- * bytes a real player's client would send/receive - so a bug in
- * Json/Protocol/GameServer's message handling would show up here even if
- * GameClient's own deserialization happened to mask it.
+ * connectivity (CTD 26 spec slides 3-4): starts an actual GameServer on a
+ * real loopback port and drives it with plain org.java_websocket clients
+ * (not GameClient) that exercise exactly the same bytes a real player's
+ * client would send/receive - so a bug in Json/Protocol/GameServer's message
+ * handling would show up here even if GameClient's own deserialization
+ * happened to mask it.
  *
- * Since Phase 4, color assignment happens on LOGIN (via matchmaking), not on
- * raw connection open - every test here sends LOGIN before expecting
- * COLOR_ASSIGNED. See GameServerDisconnectIntegrationTest for the
- * disconnect/auto-resign/reconnect side of Phase 4, kept in its own file
- * since it needs a short resignGraceMillis and real wall-clock waits that
- * the plain connectivity tests here don't.
+ * Since Phase 5, LOGIN alone no longer puts anyone into a game - a
+ * connection has to CREATE_ROOM or JOIN_ROOM explicitly (see GameServer's
+ * class doc). Every test here that needs an actual match therefore has
+ * white create a room and black join it, rather than the Phase 4 shape
+ * where logging in was enough. See RoomIntegrationTest for coverage of the
+ * room lifecycle itself (creation, the open-room list, spectating a full
+ * room) and GameServerDisconnectIntegrationTest for disconnect/auto-resign/
+ * reconnect, both kept in their own files.
  *
  * Every other test in this project exercises the engine/controller layers
  * directly, in-process, with no real I/O - these are the ones that go over
@@ -85,90 +87,49 @@ public class GameServerIntegrationTest {
         return BoardParser.parse(startingPosition);
     }
 
-    @Test
-    public void firstLoggedInPlayerIsWhiteSecondIsBlack() throws Exception {
-        BlockingQueue<Map<String, Object>> whiteMessages = new LinkedBlockingQueue<>();
-        BlockingQueue<Map<String, Object>> blackMessages = new LinkedBlockingQueue<>();
-
-        white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
-        assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
-        black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
-        assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-
-        // LOGIN is sent over each connection's own I/O thread with no ack
-        // wait, so two sends this close together have no guaranteed arrival
-        // order at the server unless we force one - waiting for white's
-        // ACCOUNT_INFO (always the LOGIN handler's first response, sent
-        // before any matchmaking decision) guarantees the server finished
-        // processing white's LOGIN, and therefore queued white, before
-        // black's LOGIN is even sent - otherwise this test would be
-        // flaky about which connection actually becomes White.
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
+    /**
+     * Logs both connections in (serialized via white's ACCOUNT_INFO ack, so
+     * the two LOGIN sends - which travel over separate connections' own I/O
+     * threads with no ordering guarantee between them - can't race), has
+     * white create {@code roomName} and black join it, and waits for both
+     * COLOR_ASSIGNED confirmations before returning.
+     */
+    private void createRoomAndJoin(BlockingQueue<Map<String, Object>> whiteMessages,
+                                    BlockingQueue<Map<String, Object>> blackMessages, String roomName) throws InterruptedException {
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
         takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
-        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob")));
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob", "password", "pw")));
+        takeOfType(blackMessages, Protocol.TYPE_ACCOUNT_INFO);
 
-        Map<String, Object> whiteColor = takeOfType(whiteMessages, Protocol.TYPE_COLOR_ASSIGNED);
-        Map<String, Object> blackColor = takeOfType(blackMessages, Protocol.TYPE_COLOR_ASSIGNED);
-
-        assertEquals("WHITE", whiteColor.get("color"));
-        assertEquals("BLACK", blackColor.get("color"));
-    }
-
-    @Test
-    public void aLoneLoggedInPlayerWaitsUntilASecondOneArrives() throws Exception {
-        BlockingQueue<Map<String, Object>> whiteMessages = new LinkedBlockingQueue<>();
-        white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
-        assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
-
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
-
-        Map<String, Object> waiting = takeOfType(whiteMessages, Protocol.TYPE_WAITING);
-        assertEquals(1.0, waiting.get("queuePosition"));
-
-        // No COLOR_ASSIGNED should show up while still alone in the queue -
-        // scan everything that arrives in a short window, ignoring the
-        // STATE broadcasts the tick loop keeps sending regardless.
-        long deadline = System.currentTimeMillis() + 1500;
-        while (System.currentTimeMillis() < deadline) {
-            Map<String, Object> msg = whiteMessages.poll(200, TimeUnit.MILLISECONDS);
-            if (msg == null) continue;
-            assertNotEquals("no match should start with only one player queued",
-                    Protocol.TYPE_COLOR_ASSIGNED, msg.get("type"));
-        }
-    }
-
-    @Test
-    public void aThirdConnectionQueuesInsteadOfJoiningTheActiveGame() throws Exception {
-        BlockingQueue<Map<String, Object>> whiteMessages = new LinkedBlockingQueue<>();
-        BlockingQueue<Map<String, Object>> blackMessages = new LinkedBlockingQueue<>();
-        BlockingQueue<Map<String, Object>> thirdMessages = new LinkedBlockingQueue<>();
-
-        white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
-        assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
-        black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
-        assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-        RecordingClient third = new RecordingClient(new URI("ws://localhost:" + port), thirdMessages);
-        assertTrue(third.connectBlocking(5, TimeUnit.SECONDS));
-
-        // LOGIN is sent over each connection's own I/O thread with no ack
-        // wait, so two sends this close together have no guaranteed arrival
-        // order at the server unless we force one - waiting for white's
-        // ACCOUNT_INFO (always the LOGIN handler's first response, sent
-        // before any matchmaking decision) guarantees the server finished
-        // processing white's LOGIN, and therefore queued white, before
-        // black's LOGIN is even sent - otherwise this test would be
-        // flaky about which connection actually becomes White.
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
-        takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
-        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob")));
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_CREATE_ROOM, "name", roomName)));
         takeOfType(whiteMessages, Protocol.TYPE_COLOR_ASSIGNED);
+
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_JOIN_ROOM, "roomId", roomName)));
         takeOfType(blackMessages, Protocol.TYPE_COLOR_ASSIGNED);
+    }
 
-        third.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Carol")));
-        Map<String, Object> waiting = takeOfType(thirdMessages, Protocol.TYPE_WAITING);
-        assertEquals(1.0, waiting.get("queuePosition"));
+    @Test
+    public void roomCreatorIsWhiteJoinerIsBlack() throws Exception {
+        BlockingQueue<Map<String, Object>> whiteMessages = new LinkedBlockingQueue<>();
+        BlockingQueue<Map<String, Object>> blackMessages = new LinkedBlockingQueue<>();
 
-        third.closeBlocking();
+        white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
+        assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
+        black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
+        assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
+
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
+        takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob", "password", "pw")));
+        takeOfType(blackMessages, Protocol.TYPE_ACCOUNT_INFO);
+
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_CREATE_ROOM, "name", "table-1")));
+        Map<String, Object> whiteColor = takeOfType(whiteMessages, Protocol.TYPE_COLOR_ASSIGNED);
+        assertEquals("WHITE", whiteColor.get("color"));
+
+        black.send(Json.write(Protocol.msg(Protocol.TYPE_JOIN_ROOM, "roomId", "table-1")));
+        Map<String, Object> blackColor = takeOfType(blackMessages, Protocol.TYPE_COLOR_ASSIGNED);
+        assertEquals("BLACK", blackColor.get("color"));
     }
 
     @Test
@@ -180,20 +141,7 @@ public class GameServerIntegrationTest {
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
         black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
         assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-
-        // LOGIN is sent over each connection's own I/O thread with no ack
-        // wait, so two sends this close together have no guaranteed arrival
-        // order at the server unless we force one - waiting for white's
-        // ACCOUNT_INFO (always the LOGIN handler's first response, sent
-        // before any matchmaking decision) guarantees the server finished
-        // processing white's LOGIN, and therefore queued white, before
-        // black's LOGIN is even sent - otherwise this test would be
-        // flaky about which connection actually becomes White.
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
-        takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
-        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob")));
-        takeOfType(whiteMessages, Protocol.TYPE_COLOR_ASSIGNED);
-        takeOfType(blackMessages, Protocol.TYPE_COLOR_ASSIGNED);
+        createRoomAndJoin(whiteMessages, blackMessages, "table-2");
 
         white.send(Json.write(Protocol.msg(Protocol.TYPE_MOVE, "from", "e2", "to", "e4")));
 
@@ -210,20 +158,7 @@ public class GameServerIntegrationTest {
         assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
         black = new RecordingClient(new URI("ws://localhost:" + port), blackMessages);
         assertTrue(black.connectBlocking(5, TimeUnit.SECONDS));
-
-        // LOGIN is sent over each connection's own I/O thread with no ack
-        // wait, so two sends this close together have no guaranteed arrival
-        // order at the server unless we force one - waiting for white's
-        // ACCOUNT_INFO (always the LOGIN handler's first response, sent
-        // before any matchmaking decision) guarantees the server finished
-        // processing white's LOGIN, and therefore queued white, before
-        // black's LOGIN is even sent - otherwise this test would be
-        // flaky about which connection actually becomes White.
-        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice")));
-        takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
-        black.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Bob")));
-        takeOfType(whiteMessages, Protocol.TYPE_COLOR_ASSIGNED);
-        takeOfType(blackMessages, Protocol.TYPE_COLOR_ASSIGNED);
+        createRoomAndJoin(whiteMessages, blackMessages, "table-3");
 
         // Black attempts to move a WHITE pawn - must be rejected regardless
         // of whether the move would otherwise be legal.
@@ -231,6 +166,20 @@ public class GameServerIntegrationTest {
 
         Map<String, Object> rejection = takeOfType(blackMessages, Protocol.TYPE_MOVE_REJECTED);
         assertEquals("not_your_piece", rejection.get("reason"));
+    }
+
+    @Test
+    public void movingBeforeJoiningARoomIsRejectedWithAnError() throws Exception {
+        BlockingQueue<Map<String, Object>> whiteMessages = new LinkedBlockingQueue<>();
+        white = new RecordingClient(new URI("ws://localhost:" + port), whiteMessages);
+        assertTrue(white.connectBlocking(5, TimeUnit.SECONDS));
+
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_LOGIN, "username", "Alice", "password", "pw")));
+        takeOfType(whiteMessages, Protocol.TYPE_ACCOUNT_INFO);
+
+        white.send(Json.write(Protocol.msg(Protocol.TYPE_MOVE, "from", "e2", "to", "e4")));
+        Map<String, Object> error = takeOfType(whiteMessages, Protocol.TYPE_ERROR);
+        assertEquals("not currently in a room", error.get("message"));
     }
 
     @SuppressWarnings("unchecked")
